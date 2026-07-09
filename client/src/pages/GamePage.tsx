@@ -6,6 +6,7 @@ import { ConfirmBankruptcyModal } from "../components/ConfirmBankruptcyModal";
 import { EventPopup } from "../components/EventPopup";
 import { GameLayout } from "../components/GameLayout";
 import { GraphBoard } from "../components/GraphBoard";
+import { AdminDebugPanel } from "../components/AdminDebugPanel";
 import { LotteryPanel } from "../components/LotteryPanel";
 import { LuckCardModal } from "../components/LuckCardModal";
 import { MonthlySettlementModal } from "../components/MonthlySettlementModal";
@@ -41,6 +42,7 @@ export function GamePage({ game, room, playerId }: GamePageProps) {
   const [monthlySettlements, setMonthlySettlements] = useState<MonthlyBankSettlement[] | null>(null);
   const [hasShownGameEndModal, setHasShownGameEndModal] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const timers = useRef<number[]>([]);
   const monthlySettlementsRef = useRef<MonthlyBankSettlement[] | null>(null);
   const monthlySettlementQueue = useRef<MonthlyBankSettlement[][]>([]);
@@ -48,6 +50,7 @@ export function GamePage({ game, room, playerId }: GamePageProps) {
   const playerReadyAt = useRef<Record<string, number>>({});
   const savedResultId = useRef<string | null>(null);
   const canRestart = game.status === "ended" && Boolean(room?.hostId && room.hostId === playerId);
+  const isHost = Boolean(room?.hostId && room.hostId === playerId);
 
   useEffect(() => {
     monthlySettlementsRef.current = monthlySettlements;
@@ -113,6 +116,12 @@ export function GamePage({ game, room, playerId }: GamePageProps) {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [mobilePanel]);
+
+  useEffect(() => {
+    if (!isHost && adminPanelOpen) {
+      setAdminPanelOpen(false);
+    }
+  }, [adminPanelOpen, isHost]);
 
   useEffect(() => {
     function schedule(callback: () => void, delay: number) {
@@ -285,6 +294,11 @@ export function GamePage({ game, room, playerId }: GamePageProps) {
     openMobilePanel("info");
   }
 
+  function openAdminPanel() {
+    setMobilePanel(null);
+    setAdminPanelOpen(true);
+  }
+
   function renderMyPanel() {
     return <MyPlayerPanel game={game} playerId={playerId} />;
   }
@@ -413,6 +427,18 @@ export function GamePage({ game, room, playerId }: GamePageProps) {
           onConfirm={confirmBankruptcy}
         />
       </GameLayout>
+      {isHost && (
+        <button className="adminDebugTrigger" type="button" onClick={openAdminPanel}>
+          管理员测试
+        </button>
+      )}
+      <AdminDebugPanel
+        game={game}
+        room={room}
+        playerId={playerId}
+        isOpen={adminPanelOpen}
+        onClose={() => setAdminPanelOpen(false)}
+      />
     </main>
   );
 }

@@ -3893,6 +3893,240 @@ select {
   cursor: pointer;
 }
 
+.adminDebugTrigger {
+  position: fixed;
+  right: 18px;
+  bottom: 94px;
+  z-index: 48;
+  border: 4px solid #5d3a7d;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffeb87, #ffaf37);
+  color: #66305d;
+  box-shadow: 0 6px 0 #8f4e2c;
+  padding: 10px 16px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.adminDebugTrigger:hover {
+  transform: translateY(-1px);
+}
+
+.adminDebugOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: rgba(35, 25, 60, 0.42);
+}
+
+.adminDebugModal {
+  width: min(1160px, 100%);
+  max-height: calc(100vh - 24px);
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  border: 5px solid #5d3a7d;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.86) 0 14%, transparent 15%),
+    linear-gradient(180deg, #fff8d7 0%, #e4fbff 100%);
+  box-shadow: 0 18px 42px rgba(35, 25, 60, 0.28);
+  overflow: hidden;
+}
+
+.adminDebugHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px 16px;
+  border-bottom: 4px solid #5d3a7d;
+  background: linear-gradient(180deg, #fff176, #ffbf4d);
+  color: #5d3a7d;
+}
+
+.adminDebugEyebrow {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.adminDebugHeader h2 {
+  margin: 8px 0 4px;
+  color: #66305d;
+  font-size: 1.55rem;
+}
+
+.adminDebugHeader p {
+  margin: 0;
+  max-width: 620px;
+  color: #6c3f7d;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.adminDebugHeaderActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.adminDebugHeaderActions button {
+  min-width: 108px;
+  min-height: 40px;
+  padding: 7px 12px;
+}
+
+.adminDebugSummary {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px 20px 0;
+}
+
+.adminDebugFacts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.adminDebugFacts span {
+  border: 2px solid #70458d;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 8px 10px;
+  color: #654077;
+  font-size: 0.85rem;
+  font-weight: 900;
+}
+
+.adminDebugFeedback {
+  margin: 12px 20px 0;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-weight: 900;
+}
+
+.adminDebugFeedback.success {
+  border: 2px solid #62c370;
+  background: #e7fff0;
+  color: #1d7c45;
+}
+
+.adminDebugFeedback.error {
+  border: 2px solid #f96e7a;
+  background: #fff0f2;
+  color: #b93653;
+}
+
+.adminDebugBody {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+  padding: 14px 20px 20px;
+}
+
+.adminDebugSection {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  border: 4px solid #7a4b9c;
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.75) 0 10%, transparent 11%),
+    #fffdf1;
+  box-shadow: 0 6px 0 rgba(61, 53, 96, 0.16);
+  padding: 14px;
+}
+
+.adminDebugSectionHeader h3 {
+  margin: 0;
+  color: #66305d;
+  font-size: 1.05rem;
+}
+
+.adminDebugSectionHeader p {
+  margin: 6px 0 0;
+  color: #6d6180;
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.adminDebugGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.adminDebugFieldWide {
+  grid-column: 1 / -1;
+}
+
+.adminDebugPlayerField {
+  margin: 0;
+}
+
+.adminDebugSection select,
+.adminDebugSection input,
+.adminDebugPlayerField select {
+  min-width: 0;
+  border: 3px solid #70458d;
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #fffbe2;
+  color: #5a2b70;
+  font: inherit;
+  font-weight: 800;
+}
+
+.adminDebugCheckbox {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 2px dashed rgba(112, 69, 141, 0.45);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.68);
+  padding: 10px 12px;
+  color: #6c3f7d;
+  font-weight: 900;
+  line-height: 1.45;
+}
+
+.adminDebugCheckbox input {
+  margin-top: 3px;
+  accent-color: #ff6b9a;
+}
+
+.adminDebugInlineHint {
+  margin: 0;
+  border: 2px dashed #ff9f43;
+  border-radius: 12px;
+  background: #fff6bd;
+  padding: 8px 10px;
+  color: #7a3b00;
+  font-size: 0.83rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.adminDebugActions {
+  margin-top: 0;
+}
+
+.adminDebugActions button {
+  min-height: 40px;
+  padding: 7px 12px;
+}
+
 /* Main game layout: keep the board clear and move permanent controls out of the map. */
 .gamePage {
   width: 100vw;
@@ -6059,6 +6293,16 @@ select {
   }
 }
 
+@media (max-width: 1024px) {
+  .adminDebugSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .adminDebugBody {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+}
+
 @media (max-height: 560px) {
   :root {
     --compact-board-width: clamp(500px, calc((100dvh - 112px) * 1.3889), 760px);
@@ -6139,5 +6383,57 @@ select {
   .mobileGameDock button {
     min-height: 32px;
     font-size: 0.76rem;
+  }
+}
+
+@media (max-width: 860px) {
+  .adminDebugTrigger {
+    right: 12px;
+    bottom: 74px;
+    padding: 9px 14px;
+    border-width: 3px;
+    font-size: 0.85rem;
+  }
+
+  .adminDebugOverlay {
+    align-items: end;
+    padding: 8px;
+  }
+
+  .adminDebugModal {
+    width: 100%;
+    max-height: min(88dvh, 980px);
+    border-width: 4px;
+    border-radius: 24px 24px 18px 18px;
+  }
+
+  .adminDebugHeader {
+    flex-direction: column;
+    padding: 14px;
+  }
+
+  .adminDebugHeaderActions {
+    width: 100%;
+  }
+
+  .adminDebugHeaderActions button {
+    flex: 1 1 0;
+  }
+
+  .adminDebugSummary {
+    padding: 12px 14px 0;
+  }
+
+  .adminDebugFeedback {
+    margin: 10px 14px 0;
+  }
+
+  .adminDebugBody {
+    grid-template-columns: 1fr;
+    padding: 12px 14px 14px;
+  }
+
+  .adminDebugGrid {
+    grid-template-columns: 1fr;
   }
 }

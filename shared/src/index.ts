@@ -933,6 +933,70 @@ export interface UseSkillPayload {
   value?: number | undefined;
 }
 
+export interface DebugSkillCatalogItem {
+  code: SkillCardCode;
+  name: string;
+  rarity: SkillRarity;
+  type?: SkillType | undefined;
+  target: SkillTargetMode;
+  costTickets: number;
+}
+
+export interface DebugLuckCardCatalogItem {
+  id: string;
+  deck: LuckCard["deck"];
+  title: string;
+  description: string;
+  tone: LuckCard["tone"];
+}
+
+export interface DebugCatalog {
+  skillCards: DebugSkillCatalogItem[];
+  luckCards: DebugLuckCardCatalogItem[];
+}
+
+export type DebugDetentionMode = "none" | "jail" | "hospital";
+
+export type DebugCommand =
+  | { kind: "getCatalog" }
+  | { kind: "grantSkillCard"; targetPlayerId: PlayerId; skillCode: SkillCardCode }
+  | { kind: "triggerLuckCard"; targetPlayerId: PlayerId; cardId: string }
+  | { kind: "teleportPlayer"; targetPlayerId: PlayerId; tileId: TileId; resolveTile?: boolean | undefined }
+  | {
+    kind: "setPlayerResources";
+    targetPlayerId: PlayerId;
+    cash?: number | undefined;
+    tickets?: number | undefined;
+    deposit?: number | undefined;
+    debtPrincipal?: number | undefined;
+    unpaidInterest?: number | undefined;
+  }
+  | {
+    kind: "setPropertyState";
+    tileId: TileId;
+    ownerPlayerId?: PlayerId | null | undefined;
+    level?: number | undefined;
+    isMortgaged?: boolean | undefined;
+  }
+  | { kind: "setPlayerStockHolding"; targetPlayerId: PlayerId; stockId: StockId; shares: number }
+  | { kind: "setStockPrice"; stockId: StockId; price: number }
+  | { kind: "setPlayerDetention"; targetPlayerId: PlayerId; detention: DebugDetentionMode; turns?: number | undefined }
+  | {
+    kind: "setTurnState";
+    currentPlayerId?: PlayerId | undefined;
+    phase?: GamePhase | undefined;
+    round?: number | undefined;
+    completedTurns?: number | undefined;
+    clearPendingAction?: boolean | undefined;
+  };
+
+export interface DebugCommandAck {
+  ok: boolean;
+  error?: string | undefined;
+  message?: string | undefined;
+  catalog?: DebugCatalog | undefined;
+}
+
 export interface ClientToServerEvents {
   createRoom: (
     payload: { nickname: string },
@@ -990,6 +1054,7 @@ export interface ClientToServerEvents {
   declareBankruptcy: () => void;
   endTurn: () => void;
   chatMessage: (payload: { message: string }) => void;
+  debugCommand: (payload: DebugCommand, ack?: (response: DebugCommandAck) => void) => void;
   voiceParticipantUpdated: (payload: { listening: boolean; speaking: boolean }) => void;
   voiceChunk: (payload: { mimeType: string; chunk: ArrayBuffer }) => void;
 }
