@@ -429,16 +429,18 @@ export function GamePage({ game, room, playerId }: GamePageProps) {
       </GameLayout>
       {isHost && (
         <button className="adminDebugTrigger" type="button" onClick={openAdminPanel}>
-          管理员测试
+          管理员模式
         </button>
       )}
-      <AdminDebugPanel
-        game={game}
-        room={room}
-        playerId={playerId}
-        isOpen={adminPanelOpen}
-        onClose={() => setAdminPanelOpen(false)}
-      />
+      {adminPanelOpen && (
+        <AdminDebugPanel
+          game={game}
+          room={room}
+          playerId={playerId}
+          isOpen={adminPanelOpen}
+          onClose={() => setAdminPanelOpen(false)}
+        />
+      )}
     </main>
   );
 }

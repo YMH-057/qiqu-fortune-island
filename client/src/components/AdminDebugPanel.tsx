@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   DebugCatalog,
   DebugCommand,
@@ -75,6 +75,7 @@ export function AdminDebugPanel({
   onClose
 }: AdminDebugPanelProps) {
   const isHost = Boolean(room?.hostId && room.hostId === playerId);
+  const openedAtRef = useRef(0);
   const [catalog, setCatalog] = useState<DebugCatalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [submittingKind, setSubmittingKind] = useState<DebugCommand["kind"] | null>(null);
@@ -122,6 +123,13 @@ export function AdminDebugPanel({
     if (!isOpen) {
       return;
     }
+    openedAtRef.current = Date.now();
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         onClose();
@@ -132,7 +140,7 @@ export function AdminDebugPanel({
   }, [isOpen, onClose]);
 
   useEffect(() => {
-    if (!isOpen || !isHost || catalog || catalogLoading) {
+    if (!isOpen || !isHost || catalog) {
       return;
     }
     let cancelled = false;
@@ -152,7 +160,15 @@ export function AdminDebugPanel({
     return () => {
       cancelled = true;
     };
-  }, [catalog, catalogLoading, isHost, isOpen]);
+  }, [catalog, isHost, isOpen]);
+
+  useEffect(() => {
+    if (isOpen) {
+      return;
+    }
+    setCatalogLoading(false);
+    setSubmittingKind(null);
+  }, [isOpen]);
 
   useEffect(() => {
     const fallbackPlayerId = playerId ?? game.turnOrder[game.currentTurnIndex] ?? game.players[0]?.id ?? "";
@@ -286,7 +302,8 @@ export function AdminDebugPanel({
   const currentTurnPlayerId = game.turnOrder[game.currentTurnIndex] ?? "";
   const currentTurnPlayer = game.players.find((player) => player.id === currentTurnPlayerId) ?? null;
   const pendingActionLabel = game.pendingAction?.kind ?? "无";
-  const isBusy = catalogLoading || submittingKind !== null;
+  const isSubmitting = submittingKind !== null;
+  const isCatalogBusy = catalogLoading || submittingKind === "getCatalog";
 
   function showFeedback(tone: FeedbackTone, message: string): void {
     setFeedback({ tone, message });
@@ -457,23 +474,33 @@ export function AdminDebugPanel({
     });
   }
 
+  function handleOverlayClick(event: React.MouseEvent<HTMLDivElement>): void {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    if (Date.now() - openedAtRef.current < 150) {
+      return;
+    }
+    onClose();
+  }
+
   return (
-    <div className="adminDebugOverlay" onClick={onClose}>
+    <div className="adminDebugOverlay" onClick={handleOverlayClick}>
       <article
         className="adminDebugModal"
         role="dialog"
         aria-modal="true"
-        aria-label="管理员测试面板"
+        aria-label="管理员模式面板"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="adminDebugHeader">
           <div>
             <span className="adminDebugEyebrow">管理员模式</span>
-            <h2>高效手测控制台</h2>
-            <p>房主可直接构造玩家、地产、股票与回合状态，不用再跑长流程喵。</p>
+            <h2>控制台</h2>
+            <p>房主可直接构造玩家、地产、股票与回合状态。</p>
           </div>
           <div className="adminDebugHeaderActions">
-            <button className="secondaryButton" type="button" onClick={refreshCatalog} disabled={isBusy}>
+            <button className="secondaryButton" type="button" onClick={refreshCatalog} disabled={isSubmitting}>
               刷新目录
             </button>
             <button className="secondaryButton" type="button" onClick={onClose}>
@@ -547,7 +574,7 @@ export function AdminDebugPanel({
               </label>
             </div>
             <div className="modalActions adminDebugActions">
-              <button type="button" onClick={handleSetPlayerResources} disabled={isBusy || !targetPlayerId}>
+              <button type="button" onClick={handleSetPlayerResources} disabled={isSubmitting || !targetPlayerId}>
                 应用玩家资源
               </button>
             </div>
@@ -569,7 +596,7 @@ export function AdminDebugPanel({
               </select>
             </label>
             <div className="modalActions adminDebugActions">
-              <button type="button" onClick={handleGrantSkillCard} disabled={isBusy || !catalog?.skillCards.length}>
+              <button type="button" onClick={handleGrantSkillCard} disabled={isCatalogBusy || !catalog?.skillCards.length}>
                 发放技能卡
               </button>
             </div>
@@ -594,7 +621,7 @@ export function AdminDebugPanel({
               {catalog?.luckCards.find((card) => card.id === selectedLuckCardId)?.description ?? "请选择一张事件卡。"}
             </p>
             <div className="modalActions adminDebugActions">
-              <button type="button" onClick={handleTriggerLuckCard} disabled={isBusy || !catalog?.luckCards.length}>
+              <button type="button" onClick={handleTriggerLuckCard} disabled={isCatalogBusy || !catalog?.luckCards.length}>
                 立即触发事件
               </button>
             </div>
@@ -624,7 +651,7 @@ export function AdminDebugPanel({
               <span>传送后立即结算该格子的效果</span>
             </label>
             <div className="modalActions adminDebugActions">
-              <button type="button" onClick={handleTeleportPlayer} disabled={isBusy || !teleportTileId}>
+              <button type="button" onClick={handleTeleportPlayer} disabled={isSubmitting || !teleportTileId}>
                 执行传送
               </button>
             </div>
@@ -681,7 +708,7 @@ export function AdminDebugPanel({
               </span>
             </label>
             <div className="modalActions adminDebugActions">
-              <button type="button" onClick={handleSetPropertyState} disabled={isBusy || !propertyTileId}>
+              <button type="button" onClick={handleSetPropertyState} disabled={isSubmitting || !propertyTileId}>
                 应用地产状态
               </button>
             </div>
@@ -713,7 +740,7 @@ export function AdminDebugPanel({
               {selectedHoldingStock && targetPlayer ? targetPlayer.stocks[selectedHoldingStock.id] ?? 0 : 0} 股。
             </p>
             <div className="modalActions adminDebugActions">
-              <button type="button" onClick={handleSetPlayerHolding} disabled={isBusy || !holdingStockId}>
+              <button type="button" onClick={handleSetPlayerHolding} disabled={isSubmitting || !holdingStockId}>
                 应用持股
               </button>
             </div>
@@ -744,7 +771,7 @@ export function AdminDebugPanel({
               当前价格：{selectedPriceStock?.currentPrice ?? "--"}，涨跌额：{selectedPriceStock?.change ?? "--"}。
             </p>
             <div className="modalActions adminDebugActions">
-              <button type="button" onClick={handleSetStockPrice} disabled={isBusy || !priceStockId}>
+              <button type="button" onClick={handleSetStockPrice} disabled={isSubmitting || !priceStockId}>
                 应用股价
               </button>
             </div>
@@ -775,7 +802,7 @@ export function AdminDebugPanel({
               </label>
             </div>
             <div className="modalActions adminDebugActions">
-              <button type="button" onClick={handleSetDetention} disabled={isBusy || !targetPlayerId}>
+              <button type="button" onClick={handleSetDetention} disabled={isSubmitting || !targetPlayerId}>
                 应用拘留状态
               </button>
             </div>
@@ -829,7 +856,7 @@ export function AdminDebugPanel({
               <span>同时清空当前待处理动作</span>
             </label>
             <div className="modalActions adminDebugActions">
-              <button type="button" onClick={handleSetTurnState} disabled={isBusy}>
+              <button type="button" onClick={handleSetTurnState} disabled={isSubmitting}>
                 应用回合状态
               </button>
             </div>
