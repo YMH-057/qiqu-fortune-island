@@ -150,7 +150,7 @@ function randomItem<T>(items: T[]): T {
   return item;
 }
 
-function addLog(state: GameState, message: string): void {
+export function addLog(state: GameState, message: string): void {
   state.logs.unshift({
     id: uid("log"),
     turn: state.completedTurns,
@@ -191,7 +191,7 @@ function logReason(reason: string): string {
   return reason;
 }
 
-function getPlayer(state: GameState, playerId: PlayerId): PlayerState | null {
+export function getPlayer(state: GameState, playerId: PlayerId): PlayerState | null {
   return state.players.find((player) => player.id === playerId) ?? null;
 }
 
@@ -200,14 +200,14 @@ export function getCurrentPlayer(state: GameState): PlayerState | null {
   return playerId ? getPlayer(state, playerId) : null;
 }
 
-function getTileById(state: GameState, tileId: TileId | undefined): Tile | null {
+export function getTileById(state: GameState, tileId: TileId | undefined): Tile | null {
   if (!tileId) {
     return null;
   }
   return state.tiles.find((tile) => tile.id === tileId) ?? null;
 }
 
-function getCurrentTile(state: GameState, player: PlayerState): Tile | null {
+export function getCurrentTile(state: GameState, player: PlayerState): Tile | null {
   return getTileById(state, player.currentTileId) ?? state.tiles[player.position] ?? null;
 }
 
@@ -258,7 +258,7 @@ export function closeMonthlySettlement(state: GameState, playerId: PlayerId): bo
   return true;
 }
 
-function setPlayerTile(state: GameState, player: PlayerState, tile: Tile, fromTileId?: TileId): void {
+export function setPlayerTile(state: GameState, player: PlayerState, tile: Tile, fromTileId?: TileId): void {
   player.lastTileId = fromTileId;
   player.currentTileId = tile.id;
   player.position = tile.index;
@@ -274,7 +274,7 @@ function sendPlayerToTile(state: GameState, player: PlayerState, targetTileId: T
   return createMovement(player, fromTile, [targetTile]);
 }
 
-function createMovement(player: PlayerState, fromTile: Tile, tilePath: Tile[]): MovementEvent {
+export function createMovement(player: PlayerState, fromTile: Tile, tilePath: Tile[]): MovementEvent {
   const toTile = tilePath[tilePath.length - 1] ?? fromTile;
   return {
     playerId: player.id,
@@ -434,7 +434,7 @@ function chargePlayer(
   return { paid, bankrupted: notice ? [notice] : [] };
 }
 
-function addCash(state: GameState, player: PlayerState, amount: number, reason: string): void {
+export function addCash(state: GameState, player: PlayerState, amount: number, reason: string): void {
   if (amount <= 0 || player.bankrupt) {
     return;
   }
@@ -455,7 +455,7 @@ function adjustTickets(state: GameState, player: PlayerState, amount: number, re
   return { playerId: player.id, tickets: player.tickets };
 }
 
-function addStatus(
+export function addStatus(
   player: PlayerState,
   type: PlayerState["statusEffects"][number]["type"],
   turns: number,
@@ -888,6 +888,114 @@ function applyLuckEffect(state: GameState, player: PlayerState, effect: LuckCard
   addStatus(player, "rentShield", effect.turns ?? 2);
   result.details.push("租金护盾已准备好，将抵挡下一次租金。");
   return result;
+}
+
+export function debugResolveSpecificLuckCard(state: GameState, playerId: PlayerId, cardId: string): ActionOutcome {
+  const player = getPlayer(state, playerId);
+  if (!player) {
+    return fail("Player not found.");
+  }
+  const tile = getCurrentTile(state, player);
+  if (!tile) {
+    return fail("Current tile not found.");
+  }
+  const card = luckCards.find((item) => item.id === cardId);
+  if (!card) {
+    return fail("Luck card not found.");
+  }
+
+  const effect = applyLuckEffect(state, player, card.effect);
+  const movements = [...effect.movements];
+  const teleports: MovementEvent[] = [];
+  const bankrupted = [...effect.bankrupted];
+  const ticketsUpdated = [...effect.ticketsUpdated];
+  let stockUpdated = effect.stockUpdated;
+  let pathChoice = effect.pathChoice;
+  let portalChoice: ActionOutcome["portalChoice"];
+  let lotteryPanel: ActionOutcome["lotteryPanel"];
+  let skillShop: ActionOutcome["skillShop"];
+  const privateSignals: NonNullable<ActionOutcome["privateSignals"]> = [];
+
+  if (effect.tileOutcome) {
+    movements.push(...effect.tileOutcome.movements);
+    teleports.push(...(effect.tileOutcome.teleports ?? []));
+    bankrupted.push(...effect.tileOutcome.bankrupted);
+    ticketsUpdated.push(...(effect.tileOutcome.ticketsUpdated ?? []));
+    stockUpdated = effect.tileOutcome.stockUpdated || stockUpdated;
+    pathChoice = effect.tileOutcome.pathChoice ?? pathChoice;
+    portalChoice = effect.tileOutcome.portalChoice ?? portalChoice;
+    lotteryPanel = effect.tileOutcome.lotteryPanel ?? lotteryPanel;
+    skillShop = effect.tileOutcome.skillShop ?? skillShop;
+    privateSignals.push(...(effect.tileOutcome.privateSignals ?? []));
+  }
+
+  const tileEvent = createTileEvent(
+    state,
+    player,
+    tile,
+    card.title,
+    `${card.description} ${effect.details.join(" ")}`.trim(),
+    card.tone,
+    card
+  );
+  state.phase = "tileAction";
+  const gameEnded = Boolean(effect.tileOutcome?.gameEnded) || checkGameEnd(state);
+
+  return {
+    ok: true,
+    movements,
+    teleports,
+    tileEvent,
+    stockUpdated,
+    bankrupted,
+    gameEnded,
+    pathChoice,
+    portalChoice,
+    lotteryPanel,
+    skillShop,
+    ticketsUpdated,
+    luckCard: { playerId: player.id, card, tileEvent },
+    privateSignals
+  };
+}
+
+export function debugTeleportToTile(
+  state: GameState,
+  playerId: PlayerId,
+  targetTileId: TileId,
+  resolveTile = false
+): ActionOutcome {
+  const player = getPlayer(state, playerId);
+  if (!player) {
+    return fail("Player not found.");
+  }
+  const targetTile = getTileById(state, targetTileId);
+  if (!targetTile) {
+    return fail("Target tile not found.");
+  }
+  const fromTile = getCurrentTile(state, player);
+  setPlayerTile(state, player, targetTile, fromTile?.id);
+  addLog(state, `${player.nickname} 被管理员传送到了 ${targetTile.name}。`);
+
+  const movement = fromTile ? createMovement(player, fromTile, [targetTile]) : null;
+  if (!resolveTile) {
+    state.phase = "tileAction";
+    return {
+      ok: true,
+      movements: movement ? [movement] : [],
+      teleports: movement ? [movement] : [],
+      stockUpdated: false,
+      bankrupted: [],
+      gameEnded: checkGameEnd(state)
+    };
+  }
+
+  const tileOutcome = handleTileEffect(state, player.id);
+  return {
+    ...tileOutcome,
+    movements: movement ? [movement, ...tileOutcome.movements] : tileOutcome.movements,
+    teleports: movement ? [movement, ...(tileOutcome.teleports ?? [])] : tileOutcome.teleports
+  };
 }
 
 function drawWeightedSkill<T extends typeof skillCardTemplates[number]>(pool: T[]): T {

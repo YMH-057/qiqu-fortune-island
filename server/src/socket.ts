@@ -1,5 +1,6 @@
 import type {
   ClientToServerEvents,
+  DebugCommandAck,
   GameState,
   ServerToClientEvents,
   SocketAck,
@@ -29,6 +30,7 @@ import {
   upgradeProperty,
   useSkillCard
 } from "./game/actions";
+import { executeDebugCommand, getDebugCatalog } from "./game/debug";
 import { exchangeMoneyToTickets, exchangeTicketsToMoney } from "./game/exchange";
 import { borrowCredit, depositMoney, leaveDetention, repayCredit, withdrawMoney } from "./game/bank";
 import { buyLotteryTicket as buyLotteryTickets } from "./game/lottery";
@@ -506,6 +508,59 @@ export function registerSocketHandlers(io: GameServer): void {
       }
       clearTurnTimer(result.room.id);
       emitRoom(io, manager, result.room);
+    });
+
+    socket.on("debugCommand", (payload, ack) => {
+      const session = getSessionRoom(socket, manager);
+      if ("error" in session) {
+        const message = session.error;
+        ack?.({ ok: false, error: message });
+        emitError(socket, message);
+        return;
+      }
+      if (session.room.hostId !== session.playerId) {
+        const message = "只有房主可以使用管理员模式。";
+        ack?.({ ok: false, error: message });
+        emitError(socket, message);
+        return;
+      }
+      if (payload.kind === "getCatalog") {
+        const response: DebugCommandAck = {
+          ok: true,
+          message: "管理员目录已准备好。",
+          catalog: getDebugCatalog()
+        };
+        ack?.(response);
+        return;
+      }
+
+      const game = session.room.game;
+      if (!game) {
+        const message = "游戏尚未开始。";
+        ack?.({ ok: false, error: message });
+        emitError(socket, message);
+        return;
+      }
+
+      const result = executeDebugCommand(game, payload);
+      if (!result.ok) {
+        const message = result.error ?? "管理员操作执行失败。";
+        ack?.({ ok: false, error: message });
+        emitError(socket, message);
+        return;
+      }
+
+      ack?.({ ok: true, message: result.message ?? "管理员操作已执行。" });
+      if (result.outcome) {
+        broadcastOutcome(io, manager, session.room, result.outcome);
+        return;
+      }
+
+      if (result.stockUpdated && session.room.game) {
+        io.to(session.room.id).emit("stockMarketUpdated", session.room.game.stocks);
+      }
+      emitGame(io, session.room);
+      scheduleTurnTimer(io, manager, session.room);
     });
 
     socket.on("rollDice", () => {
