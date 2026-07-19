@@ -10,12 +10,18 @@ export type GameDurationMode = "short_3_months" | "standard_1_year" | "long_2_ye
 export type LapRewardMode = "go" | "home";
 
 export const GO_TILE_ID = "tile-00" as const;
+export const MIN_ROOM_PLAYERS = 2;
+export const MAX_ROOM_PLAYERS = 8;
 
 export const START_TILE_OPTIONS = [
   { tileId: "tile-00", nameZh: "左上 GO", nameEn: "Upper-left GO" },
+  { tileId: "tile-02", nameZh: "上方中点", nameEn: "Upper midpoint" },
   { tileId: "tile-05", nameZh: "右上角", nameEn: "Upper-right" },
+  { tileId: "tile-07", nameZh: "右侧中点", nameEn: "Right midpoint" },
   { tileId: "tile-09", nameZh: "右下角", nameEn: "Lower-right" },
-  { tileId: "tile-14", nameZh: "左下角", nameEn: "Lower-left" }
+  { tileId: "tile-12", nameZh: "下方中点", nameEn: "Lower midpoint" },
+  { tileId: "tile-14", nameZh: "左下角", nameEn: "Lower-left" },
+  { tileId: "tile-16", nameZh: "左侧中点", nameEn: "Left midpoint" }
 ] as const;
 
 export interface AvatarDefinition {
@@ -610,6 +616,7 @@ export interface PlayerState {
   color: string;
   avatar: string;
   selectedAvatarId?: AvatarId | undefined;
+  isBot?: boolean | undefined;
   cash: number;
   position: number;
   currentTileId: TileId;
@@ -638,6 +645,7 @@ export interface RoomPlayer {
   avatar: string;
   selectedAvatarId?: AvatarId | undefined;
   selectedStartTileId?: TileId | undefined;
+  isBot?: boolean | undefined;
   ready: boolean;
   connected: boolean;
   isHost: boolean;
@@ -1002,8 +1010,15 @@ export interface ClientToServerEvents {
     payload: { nickname: string },
     ack?: (response: SocketAck) => void
   ) => void;
+  addAiPlayer: (payload?: { nickname?: string | undefined }, ack?: (response: SocketAck) => void) => void;
+  removeAiPlayer: (payload: { playerId: PlayerId }, ack?: (response: SocketAck) => void) => void;
   joinRoom: (
-    payload: { roomId: string; nickname: string; playerId?: string | undefined },
+    payload: {
+      roomId: string;
+      nickname: string;
+      playerId?: string | undefined;
+      reconnectToken?: string | undefined;
+    },
     ack?: (response: SocketAck) => void
   ) => void;
   kickPlayer: (payload: { roomId: string; targetPlayerId: PlayerId }) => void;
@@ -1137,4 +1152,5 @@ export interface SocketAck {
   room?: RoomPublicState | undefined;
   game?: GameState | undefined;
   playerId?: PlayerId | undefined;
+  reconnectToken?: string | undefined;
 }

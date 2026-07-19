@@ -233,12 +233,15 @@ function openMonthlySettlementGate(state: GameState, settlements: MonthlyBankSet
     return;
   }
   const waitingPlayerIds = state.players
-    .filter((player) => player.connected && !player.bankrupt)
+    .filter((player) => player.connected && !player.isBot && !player.bankrupt)
     .map((player) => player.id);
+  if (waitingPlayerIds.length === 0) {
+    return;
+  }
   state.pendingMonthlySettlement = {
     id: uid("monthly-settlement"),
     settlements,
-    waitingPlayerIds: waitingPlayerIds.length > 0 ? waitingPlayerIds : state.players.map((player) => player.id),
+    waitingPlayerIds,
     createdAt: Date.now()
   };
 }

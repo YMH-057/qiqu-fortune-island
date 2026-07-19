@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import type { GameState, PlayerState, Tile, TileId, TileType } from "@monopoly/shared";
+import { getPlayerTokenOffset } from "../game/playerTokenLayout";
 import { useI18n } from "../i18n";
 import { PlayerToken } from "./PlayerToken";
 
@@ -19,13 +20,6 @@ export const BOARD_HEIGHT = 720;
 export const TILE_WIDTH = 44;
 export const TILE_HEIGHT = 34;
 export const MIN_TILE_CENTER_DISTANCE = 48;
-
-const pieceOffsets = [
-  { x: -11, y: -11 },
-  { x: 11, y: -11 },
-  { x: -11, y: 11 },
-  { x: 11, y: 11 }
-];
 
 const tileEmoji: Record<TileType, string> = {
   start: "GO",
@@ -205,7 +199,7 @@ function GraphToken({
   tile: Tile;
 }) {
   const point = pointFor(tile);
-  const offset = pieceOffsets[index % pieceOffsets.length] ?? { x: 0, y: 0 };
+  const offset = getPlayerTokenOffset(index);
   return (
     <div
       className="graphToken"

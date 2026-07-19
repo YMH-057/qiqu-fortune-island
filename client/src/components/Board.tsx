@@ -1,5 +1,6 @@
 import type { GameState, PlayerState, Tile } from "@monopoly/shared";
 import { BOARD_SIZE, getBoardCell } from "../game/boardLayout";
+import { getPlayerTokenOffset } from "../game/playerTokenLayout";
 import { useI18n } from "../i18n";
 import { PlayerToken } from "./PlayerToken";
 import { TileIcon } from "./TileIcons";
@@ -9,13 +10,6 @@ interface BoardProps {
   animatedPositions: Record<string, number>;
   localPlayerId: string | null;
 }
-
-const pieceOffsets = [
-  { x: -13, y: -13 },
-  { x: 13, y: -13 },
-  { x: -13, y: 13 },
-  { x: 13, y: 13 }
-];
 
 function TileCell({
   game,
@@ -66,7 +60,7 @@ function TileCell({
       )}
       <div className="pieceLayer">
         {players.map((player, index) => {
-          const offset = pieceOffsets[index % pieceOffsets.length] ?? { x: 0, y: 0 };
+          const offset = getPlayerTokenOffset(index);
           return (
             <PlayerToken
               key={player.id}
