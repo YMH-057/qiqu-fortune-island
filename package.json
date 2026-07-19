@@ -18,6 +18,10 @@
     "docs:map": "npx tsx scripts/generate-map-plan.ts",
     "docs": "npm run docs:skills && npm run docs:map",
     "docs:audit": "npx tsx scripts/audit-rule-docs.ts",
+    "test": "npm run test:ai && npm run test:rooms && npm run test:security",
+    "test:ai": "npx tsx scripts/test-ai.ts",
+    "test:rooms": "npx tsx scripts/test-room-capacity.ts",
+    "test:security": "npx tsx scripts/test-room-security.ts",
     "build": "npm --workspace server run build && npm --workspace client run build",
     "typecheck": "npm --workspace server run typecheck && npm --workspace client run typecheck"
   },

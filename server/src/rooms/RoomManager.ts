@@ -1,5 +1,7 @@
 import {
   AVATAR_DEFINITIONS,
+  MAX_ROOM_PLAYERS,
+  MIN_ROOM_PLAYERS,
   START_TILE_OPTIONS,
   type AvatarId,
   type ChatMessage,
@@ -9,7 +11,9 @@ import {
   type RoomPublicState,
   type TileId
 } from "@monopoly/shared";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createGameState } from "../game/createGameState";
+import { closeMonthlySettlement } from "../game/actions";
 import { MemoryRoomStore, type RoomMember, type RoomRecord, type RoomStore } from "./RoomStore";
 
 interface RoomResult {
@@ -17,12 +21,15 @@ interface RoomResult {
   error?: string;
   room?: RoomRecord;
   playerId?: string;
+  reconnectToken?: string;
+  previousSocketId?: string;
   targetPlayerId?: string;
   targetSocketId?: string;
 }
 
-const PLAYER_COLORS = ["#ef4444", "#3b82f6", "#22c55e", "#f59e0b"];
-const PLAYER_AVATARS = ["Pilot", "Bot", "Ranger", "Maker"];
+const PLAYER_COLORS = ["#ef4444", "#3b82f6", "#22c55e", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
+const PLAYER_AVATARS = ["Pilot", "Bot", "Ranger", "Maker", "Captain", "Scholar", "Guardian", "Explorer"];
+const AI_NICKNAMES = ["AI 豆豆", "AI 果果", "AI 星仔", "AI 泡泡", "AI 糖糖", "AI 云宝", "AI 乐乐"];
 const DEFAULT_AVATAR_IDS = AVATAR_DEFINITIONS.map((avatar) => avatar.id);
 const START_TILE_IDS: TileId[] = START_TILE_OPTIONS.map((option) => option.tileId);
 const DEFAULT_SETTINGS: GameSettings = {
@@ -76,6 +83,26 @@ function sanitizeNickname(nickname: string): string {
   return clean.length > 0 ? clean : "Player";
 }
 
+function firstAvailablePlayerColor(players: RoomMember[]): string {
+  const occupied = new Set(players.map((player) => player.color));
+  return PLAYER_COLORS.find((color) => !occupied.has(color)) ?? PLAYER_COLORS[players.length % PLAYER_COLORS.length] ?? "#64748b";
+}
+
+function createReconnectCredential(): { token: string; hash: string } {
+  const token = randomBytes(32).toString("base64url");
+  return { token, hash: hashReconnectToken(token) };
+}
+
+function hashReconnectToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function reconnectTokenMatches(token: string, expectedHash: string): boolean {
+  const actual = Buffer.from(hashReconnectToken(token), "hex");
+  const expected = Buffer.from(expectedHash, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
 export class RoomManager {
   constructor(private readonly store: RoomStore = new MemoryRoomStore()) {}
 
@@ -86,6 +113,7 @@ export class RoomManager {
     }
 
     const playerId = makeId("P", 8);
+    const reconnectCredential = createReconnectCredential();
     const player: RoomMember = {
       id: playerId,
       nickname: sanitizeNickname(nickname),
@@ -93,6 +121,8 @@ export class RoomManager {
       avatar: PLAYER_AVATARS[0] ?? "Pilot",
       selectedAvatarId: DEFAULT_AVATAR_IDS[0],
       selectedStartTileId: START_TILE_IDS[0],
+      isBot: false,
+      reconnectTokenHash: reconnectCredential.hash,
       ready: false,
       connected: true,
       socketId
@@ -110,7 +140,7 @@ export class RoomManager {
     };
 
     this.store.set(room);
-    return { ok: true, room, playerId };
+    return { ok: true, room, playerId, reconnectToken: reconnectCredential.token };
   }
 
   updateSettings(roomId: string, playerId: string, patch: Partial<GameSettings>): RoomResult {
@@ -235,13 +265,85 @@ export class RoomManager {
       room.settings.endCondition = "rounds";
     }
 
-    for (const player of room.players) {
-      player.ready = false;
-    }
+    this.resetLobbyReadiness(room);
     return { ok: true, room, playerId };
   }
 
-  joinRoom(roomId: string, nickname: string, socketId: string, playerId?: string): RoomResult {
+  addAiPlayer(roomId: string, hostPlayerId: string, nickname?: string): RoomResult {
+    const room = this.store.get(roomId);
+    if (!room) {
+      return { ok: false, error: "Room not found." };
+    }
+    if (room.hostId !== hostPlayerId) {
+      return { ok: false, error: "只有房主可以添加 AI 补位。" };
+    }
+    if (room.status !== "lobby") {
+      return { ok: false, error: "游戏开始后不能添加 AI 补位。" };
+    }
+    if (room.players.length >= MAX_ROOM_PLAYERS) {
+      return { ok: false, error: "房间已满，不能继续添加 AI。" };
+    }
+
+    const botId = makeId("AI", 8);
+    const nextIndex = room.players.length;
+    const occupiedAvatarIds = new Set(room.players.map((player) => player.selectedAvatarId).filter(Boolean));
+    const occupiedNames = new Set(room.players.map((player) => player.nickname));
+    const selectedAvatarId =
+      DEFAULT_AVATAR_IDS.find((avatarId) => !occupiedAvatarIds.has(avatarId)) ??
+      DEFAULT_AVATAR_IDS[nextIndex % DEFAULT_AVATAR_IDS.length];
+    const defaultName =
+      AI_NICKNAMES.find((candidate) => !occupiedNames.has(candidate)) ??
+      `AI 补位 ${room.players.filter((player) => player.isBot).length + 1}`;
+    const bot: RoomMember = {
+      id: botId,
+      nickname: sanitizeNickname(nickname || defaultName),
+      color: firstAvailablePlayerColor(room.players),
+      avatar: "AI",
+      selectedAvatarId,
+      selectedStartTileId:
+        this.firstAvailableStartTile(room.players) ??
+        START_TILE_IDS[nextIndex % START_TILE_IDS.length] ??
+        START_TILE_IDS[0],
+      isBot: true,
+      ready: true,
+      connected: true,
+      socketId: `bot:${botId}`
+    };
+
+    room.players.push(bot);
+    this.resetLobbyReadiness(room);
+    return { ok: true, room, playerId: hostPlayerId, targetPlayerId: bot.id };
+  }
+
+  removeAiPlayer(roomId: string, hostPlayerId: string, targetPlayerId: string): RoomResult {
+    const room = this.store.get(roomId);
+    if (!room) {
+      return { ok: false, error: "Room not found." };
+    }
+    if (room.hostId !== hostPlayerId) {
+      return { ok: false, error: "只有房主可以移除 AI 补位。" };
+    }
+    if (room.status !== "lobby") {
+      return { ok: false, error: "游戏开始后不能移除 AI 补位。" };
+    }
+    const targetIndex = room.players.findIndex((player) => player.id === targetPlayerId);
+    const target = room.players[targetIndex];
+    if (!target || !target.isBot) {
+      return { ok: false, error: "只能移除 AI 补位玩家。" };
+    }
+
+    room.players.splice(targetIndex, 1);
+    this.resetLobbyReadiness(room);
+    return { ok: true, room, playerId: hostPlayerId, targetPlayerId };
+  }
+
+  joinRoom(
+    roomId: string,
+    nickname: string,
+    socketId: string,
+    playerId?: string,
+    reconnectToken?: string
+  ): RoomResult {
     const room = this.store.get(roomId.trim().toUpperCase());
     if (!room) {
       return { ok: false, error: "Room not found." };
@@ -252,24 +354,35 @@ export class RoomManager {
 
     if (playerId) {
       const existing = room.players.find((player) => player.id === playerId);
-      if (existing) {
-        existing.connected = true;
-        existing.socketId = socketId;
-        existing.nickname = sanitizeNickname(nickname || existing.nickname);
-        this.syncGamePlayer(room, existing.id, { connected: true, nickname: existing.nickname });
-        return { ok: true, room, playerId: existing.id };
+      if (!existing || existing.isBot) {
+        return { ok: false, error: "重连身份无效，请重新加入房间。" };
       }
+      if (
+        typeof reconnectToken !== "string" ||
+        !existing.reconnectTokenHash ||
+        !reconnectTokenMatches(reconnectToken, existing.reconnectTokenHash)
+      ) {
+        return { ok: false, error: "重连凭证无效，请重新加入房间。" };
+      }
+      const previousSocketId = existing.socketId !== socketId ? existing.socketId : null;
+      existing.connected = true;
+      existing.socketId = socketId;
+      existing.nickname = sanitizeNickname(nickname || existing.nickname);
+      this.syncGamePlayer(room, existing.id, { connected: true, nickname: existing.nickname });
+      const result: RoomResult = { ok: true, room, playerId: existing.id, reconnectToken };
+      return previousSocketId ? { ...result, previousSocketId } : result;
     }
 
     if (room.status !== "lobby") {
       return { ok: false, error: "Game already started. Reconnect with the original player id." };
     }
-    if (room.players.length >= 4) {
+    if (room.players.length >= MAX_ROOM_PLAYERS) {
       return { ok: false, error: "Room is full." };
     }
 
     const nextIndex = room.players.length;
     const newPlayerId = makeId("P", 8);
+    const reconnectCredential = createReconnectCredential();
     const occupiedAvatarIds = new Set(room.players.map((player) => player.selectedAvatarId).filter(Boolean));
     const selectedAvatarId =
       DEFAULT_AVATAR_IDS.find((avatarId) => !occupiedAvatarIds.has(avatarId)) ??
@@ -277,16 +390,18 @@ export class RoomManager {
     room.players.push({
       id: newPlayerId,
       nickname: sanitizeNickname(nickname),
-      color: PLAYER_COLORS[nextIndex] ?? "#64748b",
-      avatar: PLAYER_AVATARS[nextIndex] ?? "Pilot",
+      color: firstAvailablePlayerColor(room.players),
+      avatar: PLAYER_AVATARS[nextIndex % PLAYER_AVATARS.length] ?? "Pilot",
       selectedAvatarId,
       selectedStartTileId: this.firstAvailableStartTile(room.players) ?? START_TILE_IDS[nextIndex % START_TILE_IDS.length] ?? START_TILE_IDS[0],
+      isBot: false,
+      reconnectTokenHash: reconnectCredential.hash,
       ready: false,
       connected: true,
       socketId
     });
 
-    return { ok: true, room, playerId: newPlayerId };
+    return { ok: true, room, playerId: newPlayerId, reconnectToken: reconnectCredential.token };
   }
 
   selectAvatar(roomId: string, playerId: string, avatarId: AvatarId): RoomResult {
@@ -366,9 +481,7 @@ export class RoomManager {
     }
 
     room.kickedPlayerIds = [...new Set([...(room.kickedPlayerIds ?? []), target.id])];
-    for (const player of room.players) {
-      player.ready = false;
-    }
+    this.resetLobbyReadiness(room);
 
     return {
       ok: true,
@@ -406,8 +519,8 @@ export class RoomManager {
     if (room.status !== "lobby") {
       return { ok: false, error: "The game has already started." };
     }
-    if (room.players.length < 2 || room.players.length > 4) {
-      return { ok: false, error: "The game needs 2 to 4 players." };
+    if (room.players.length < MIN_ROOM_PLAYERS || room.players.length > MAX_ROOM_PLAYERS) {
+      return { ok: false, error: `The game needs ${MIN_ROOM_PLAYERS} to ${MAX_ROOM_PLAYERS} players.` };
     }
     if (!room.players.every((player) => player.ready)) {
       return { ok: false, error: "All players must be ready first." };
@@ -433,9 +546,7 @@ export class RoomManager {
 
     room.status = "lobby";
     delete room.game;
-    for (const player of room.players) {
-      player.ready = false;
-    }
+    this.resetLobbyReadiness(room);
     return { ok: true, room, playerId };
   }
 
@@ -464,8 +575,8 @@ export class RoomManager {
     return { ok: true, room, playerId };
   }
 
-  markDisconnected(socketId: string): RoomRecord[] {
-    const changedRooms: RoomRecord[] = [];
+  markDisconnected(socketId: string): Array<{ room: RoomRecord; resumeTurnTimer: boolean }> {
+    const changedRooms: Array<{ room: RoomRecord; resumeTurnTimer: boolean }> = [];
     for (const room of this.store.list()) {
       const player = room.players.find((item) => item.socketId === socketId);
       if (!player) {
@@ -473,7 +584,16 @@ export class RoomManager {
       }
       player.connected = false;
       this.syncGamePlayer(room, player.id, { connected: false });
-      changedRooms.push(room);
+      const wasWaitingForMonthlySettlement = Boolean(
+        room.game?.pendingMonthlySettlement?.waitingPlayerIds.includes(player.id)
+      );
+      if (room.game && wasWaitingForMonthlySettlement) {
+        closeMonthlySettlement(room.game, player.id);
+      }
+      changedRooms.push({
+        room,
+        resumeTurnTimer: wasWaitingForMonthlySettlement && !room.game?.pendingMonthlySettlement
+      });
     }
     return changedRooms;
   }
@@ -555,9 +675,16 @@ export class RoomManager {
       avatar: player.avatar,
       selectedAvatarId: player.selectedAvatarId,
       selectedStartTileId: player.selectedStartTileId,
+      isBot: player.isBot,
       ready: player.ready,
       connected: player.connected,
       isHost: player.id === room.hostId
     }));
+  }
+
+  private resetLobbyReadiness(room: RoomRecord): void {
+    for (const player of room.players) {
+      player.ready = Boolean(player.isBot);
+    }
   }
 }

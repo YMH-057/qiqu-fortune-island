@@ -6,6 +6,7 @@ import { I18nProvider, type Language, useI18n } from "./i18n";
 import { GamePage } from "./pages/GamePage";
 import { HomePage } from "./pages/HomePage";
 import { RoomPage } from "./pages/RoomPage";
+import { shouldDiscardReconnectSession } from "./game/sessionPolicy";
 import { socket } from "./socket/socket";
 
 type View = "home" | "room" | "game";
@@ -14,6 +15,7 @@ interface StoredSession {
   roomId: string;
   playerId: string;
   nickname: string;
+  reconnectToken: string;
 }
 
 const sessionKey = "monopoly-online-session";
@@ -25,7 +27,17 @@ function loadSession(): StoredSession | null {
     return null;
   }
   try {
-    return JSON.parse(raw) as StoredSession;
+    const parsed = JSON.parse(raw) as Partial<StoredSession>;
+    if (
+      typeof parsed.roomId === "string" &&
+      typeof parsed.playerId === "string" &&
+      typeof parsed.nickname === "string" &&
+      typeof parsed.reconnectToken === "string"
+    ) {
+      return parsed as StoredSession;
+    }
+    window.localStorage.removeItem(sessionKey);
+    return null;
   } catch {
     window.localStorage.removeItem(sessionKey);
     return null;
@@ -158,17 +170,23 @@ export function App() {
       {
         roomId: savedSession.roomId,
         nickname: savedSession.nickname,
-        playerId: savedSession.playerId
+        playerId: savedSession.playerId,
+        reconnectToken: savedSession.reconnectToken
       },
       (response: SocketAck) => {
-        if (!response.ok || !response.room || !response.playerId) {
-          if (response.error?.includes("移出")) {
-            window.localStorage.removeItem(sessionKey);
-          }
+        if (!response.ok || !response.room || !response.playerId || !response.reconnectToken) {
+          window.localStorage.removeItem(sessionKey);
+          setPlayerId(null);
           return;
         }
         setRoom(response.room);
         setPlayerId(response.playerId);
+        saveSession({
+          roomId: response.room.id,
+          playerId: response.playerId,
+          nickname: savedSession.nickname,
+          reconnectToken: response.reconnectToken
+        });
         setNickname(savedSession.nickname);
         if (response.game) {
           setGame(response.game);
@@ -183,14 +201,19 @@ export function App() {
   function handleCreateRoom(nextNickname: string) {
     const cleanNickname = nextNickname.trim() || "玩家";
     socket.emit("createRoom", { nickname: cleanNickname }, (response: SocketAck) => {
-      if (!response.ok || !response.room || !response.playerId) {
+      if (!response.ok || !response.room || !response.playerId || !response.reconnectToken) {
         setError(response.error ?? "无法创建房间。");
         return;
       }
       setNickname(cleanNickname);
       setRoom(response.room);
       setPlayerId(response.playerId);
-      saveSession({ roomId: response.room.id, playerId: response.playerId, nickname: cleanNickname });
+      saveSession({
+        roomId: response.room.id,
+        playerId: response.playerId,
+        nickname: cleanNickname,
+        reconnectToken: response.reconnectToken
+      });
       setView("room");
     });
   }
@@ -200,22 +223,25 @@ export function App() {
     const cleanNickname = nextNickname.trim() || "玩家";
     const saved = loadSession();
     const reconnectPlayerId = saved?.roomId === cleanRoomId ? saved.playerId : undefined;
+    const reconnectToken = saved?.roomId === cleanRoomId ? saved.reconnectToken : undefined;
 
-    const joinPayload: { roomId: string; nickname: string; playerId?: string } = {
+    const joinPayload: { roomId: string; nickname: string; playerId?: string; reconnectToken?: string } = {
       roomId: cleanRoomId,
       nickname: cleanNickname
     };
-    if (reconnectPlayerId) {
+    if (reconnectPlayerId && reconnectToken) {
       joinPayload.playerId = reconnectPlayerId;
+      joinPayload.reconnectToken = reconnectToken;
     }
 
     socket.emit(
       "joinRoom",
       joinPayload,
       (response: SocketAck) => {
-        if (!response.ok || !response.room || !response.playerId) {
-          if (response.error?.includes("移出")) {
+        if (!response.ok || !response.room || !response.playerId || !response.reconnectToken) {
+          if (shouldDiscardReconnectSession(response.error)) {
             window.localStorage.removeItem(sessionKey);
+            setPlayerId(null);
           }
           setError(response.error ?? "无法加入房间。");
           return;
@@ -223,7 +249,12 @@ export function App() {
         setNickname(cleanNickname);
         setRoom(response.room);
         setPlayerId(response.playerId);
-        saveSession({ roomId: response.room.id, playerId: response.playerId, nickname: cleanNickname });
+        saveSession({
+          roomId: response.room.id,
+          playerId: response.playerId,
+          nickname: cleanNickname,
+          reconnectToken: response.reconnectToken
+        });
         if (response.game) {
           setGame(response.game);
           setView("game");
