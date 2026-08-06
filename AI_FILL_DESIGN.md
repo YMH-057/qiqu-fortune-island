@@ -59,13 +59,28 @@ AI 每次只执行一步，然后交还给 Socket 调度器重新判断，避免
 ## 决策提供器与 API 扩展
 
 - 默认使用 `RuleBasedAiDecisionProvider`，也就是当前可离线运行、结果可复现的硬编码策略。
-- 设置 `AI_DECISION_API_URL` 后启用 `ApiAiDecisionProvider`；服务端使用 `qiqu-ai/1` 信封发送当前 AI 的个人视角状态，并接收单个 `AiTurnCommand`。
+- 设置 `AI_DECISION_API_URL` 后可以启用外部决策器。`AI_DECISION_API_MODE=protocol` 使用原生 `qiqu-ai/1` 信封；`AI_DECISION_API_MODE=responses` 使用兼容 OpenAI `/v1/responses` 的接口，并由模型把同一份安全上下文转换为单个 `AiTurnCommand`。
+- 本地中转站模式会发送标准消息数组、`store: false` 与流式请求，并解析 `response.output_text.delta` / `response.output_text.done` SSE 事件。模型名称由 `AI_DECISION_MODEL` 指定。
 - 请求和响应必须具有相同的 `version` 和 `requestId`；JSON Schema 见 `server/src/game/aiDecisionProtocol.v1.schema.json`。
 - 可选的 `AI_DECISION_API_KEY` 只从本机环境变量读取，不写入仓库；示例见 `server/.env.example`。
 - API 返回的命令必须属于白名单、携带当前 AI 的 `playerId`，并再次经过服务端动作函数校验。API 不能直接修改游戏状态。
 - API 超时、网络失败、JSON 无效、玩家身份不符或动作失败时，立即回落到本地规则 AI；回合仍受统一超时机制保护。
 - 发送给 API 的股票委托已经过玩家视角投影，其他玩家尚未结算的委托不会泄露。
 - 服务端内存最多保留 500 条脱敏审计，只记录提供器、AI、命令、耗时和成功/回落原因，不记录 API Key 或完整游戏状态。
+
+### 本地 Responses 中转站
+
+在不提交密钥的 `server/.env` 中配置：
+
+```dotenv
+AI_DECISION_API_MODE=responses
+AI_DECISION_API_URL=http://localhost:1455/v1/responses
+AI_DECISION_API_KEY=填写本机中转站生成的独立密钥
+AI_DECISION_MODEL=gpt-5.6-luna
+AI_DECISION_API_TIMEOUT_MS=60000
+```
+
+中转站运行后可执行 `npm run test:ai-live` 发起一次真实 AI 决策。该命令只输出提供器、命令类型、耗时和状态，不输出密钥或完整游戏状态。中转站未启动、超时或返回非法命令时，游戏自动改用本地硬编码 AI，不会阻塞当前回合。
 
 ## 月度结算
 

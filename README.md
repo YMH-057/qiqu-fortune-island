@@ -37,6 +37,20 @@ npm run dev:client
 
 如果 `4000` 端口被占用，先关闭旧服务端进程，或用 `PORT` 指定新端口。
 
+### 本地 AI 中转站（可选）
+
+项目默认使用不联网的硬编码 AI。若本机已经运行兼容 OpenAI Responses API 的中转站，可在不会提交到 Git 的 `server/.env` 中设置：
+
+```dotenv
+AI_DECISION_API_MODE=responses
+AI_DECISION_API_URL=http://localhost:1455/v1/responses
+AI_DECISION_API_KEY=填写中转站分配的独立密钥
+AI_DECISION_MODEL=gpt-5.6-luna
+AI_DECISION_API_TIMEOUT_MS=60000
+```
+
+用 `npm run test:ai-live` 验证真实调用。中转站不可用或返回非法动作时，服务端会自动回落到硬编码 AI；所有模型动作仍要经过原有服务端规则校验。
+
 ## 公网临时联机
 
 - Cloudflare 临时隧道：双击 `start-public-cloudflare.bat`。
@@ -327,6 +341,7 @@ AI 补位的服务端封装、决策范围和后续扩展计划见 [AI_FILL_DESI
 
 ```bash
 npm test
+npm run test:ai-live  # 需要本地中转站和 server/.env
 npm run typecheck
 npm run docs:audit
 npm run build

@@ -4,6 +4,7 @@ import type { AiTurnCommand } from "../server/src/game/ai";
 import {
   ApiAiDecisionProvider,
   createConfiguredAiDecisionProvider,
+  OpenAiResponsesAiDecisionProvider,
   type AiDecisionContext,
   type AiDecisionProvider,
   runAiTurnStepWithProvider
@@ -86,6 +87,8 @@ function testAuditStoreIsBoundedAndContainsOnlyMetadata() {
 
 function testConfiguredProviderReadsEnvironmentAtCreationTime() {
   const previousUrl = process.env.AI_DECISION_API_URL;
+  const previousMode = process.env.AI_DECISION_API_MODE;
+  const previousModel = process.env.AI_DECISION_MODEL;
   const previousTimeout = process.env.AI_DECISION_API_TIMEOUT_MS;
   try {
     delete process.env.AI_DECISION_API_URL;
@@ -94,12 +97,122 @@ function testConfiguredProviderReadsEnvironmentAtCreationTime() {
     process.env.AI_DECISION_API_URL = "https://ai.invalid/decision";
     process.env.AI_DECISION_API_TIMEOUT_MS = "1500";
     assert.equal(createConfiguredAiDecisionProvider().id, "api-v1");
+
+    process.env.AI_DECISION_API_MODE = "responses";
+    process.env.AI_DECISION_MODEL = "test-model";
+    assert.equal(createConfiguredAiDecisionProvider().id, "openai-responses-v1");
   } finally {
     if (previousUrl === undefined) delete process.env.AI_DECISION_API_URL;
     else process.env.AI_DECISION_API_URL = previousUrl;
+    if (previousMode === undefined) delete process.env.AI_DECISION_API_MODE;
+    else process.env.AI_DECISION_API_MODE = previousMode;
+    if (previousModel === undefined) delete process.env.AI_DECISION_MODEL;
+    else process.env.AI_DECISION_MODEL = previousModel;
     if (previousTimeout === undefined) delete process.env.AI_DECISION_API_TIMEOUT_MS;
     else process.env.AI_DECISION_API_TIMEOUT_MS = previousTimeout;
   }
+}
+
+async function testResponsesProviderExtractsProtocolEnvelope() {
+  const context = makeAiContext();
+  const auditStore = new InMemoryAiDecisionAuditStore();
+  let sentBody: Record<string, unknown> | null = null;
+  const provider = new OpenAiResponsesAiDecisionProvider({
+    endpoint: "http://localhost:1455/v1/responses",
+    apiKey: "test-key",
+    model: "test-model",
+    auditStore,
+    fetchImpl: async (_input, init) => {
+      sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const input = JSON.stringify(sentBody.input);
+      const requestId = /\"requestId\":\"([^\"]+)\"/.exec(input)?.[1];
+      const output = JSON.stringify({
+        version: AI_DECISION_PROTOCOL_VERSION,
+        requestId,
+        command: { kind: "rollDice", playerId: context.playerId }
+      });
+      const splitAt = Math.floor(output.length / 2);
+      const events = [
+        `event: response.output_text.delta\ndata: ${JSON.stringify({
+          type: "response.output_text.delta",
+          delta: output.slice(0, splitAt)
+        })}`,
+        `event: response.output_text.delta\ndata: ${JSON.stringify({
+          type: "response.output_text.delta",
+          delta: output.slice(splitAt)
+        })}`,
+        `event: response.output_text.done\ndata: ${JSON.stringify({
+          type: "response.output_text.done",
+          text: output
+        })}`,
+        `event: response.completed\ndata: ${JSON.stringify({
+          type: "response.completed",
+          response: { status: "completed" }
+        })}`
+      ].join("\n\n");
+      return new Response(events, { status: 200, headers: { "content-type": "text/plain" } });
+    }
+  });
+
+  const command = await provider.decide(context);
+
+  assert.equal(sentBody?.model, "test-model");
+  assert.equal(sentBody?.store, false);
+  assert.equal(sentBody?.stream, true);
+  assert.ok(Array.isArray(sentBody?.input));
+  assert.equal((sentBody.input[0] as { role?: string }).role, "user");
+  assert.match(JSON.stringify(sentBody.input), /qiqu-ai\/1/);
+  assert.equal(command.kind, "rollDice");
+  assert.equal(auditStore.list()[0]?.status, "decision_success");
+}
+
+async function testResponsesProviderFallsBackOnNonJsonOutput() {
+  const context = makeAiContext();
+  const auditStore = new InMemoryAiDecisionAuditStore();
+  const fallback: AiDecisionProvider = {
+    id: "test-fallback",
+    async decide(innerContext) {
+      return { kind: "rollDice", playerId: innerContext.playerId };
+    }
+  };
+  const provider = new OpenAiResponsesAiDecisionProvider({
+    endpoint: "http://localhost:1455/v1/responses",
+    apiKey: "test-key",
+    model: "test-model",
+    fallback,
+    auditStore,
+    fetchImpl: async () => new Response([
+      "event: response.output_text.delta",
+      `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "not json" })}`,
+      "",
+      "event: response.output_text.done",
+      `data: ${JSON.stringify({ type: "response.output_text.done", text: "not json" })}`
+    ].join("\n"), { status: 200, headers: { "content-type": "text/event-stream" } })
+  });
+
+  const command = await provider.decide(context);
+
+  assert.equal(command.kind, "rollDice");
+  assert.equal(auditStore.list()[0]?.status, "decision_fallback");
+}
+
+async function testResponsesProviderDoesNotAuditRemoteErrorBody() {
+  const context = makeAiContext();
+  const auditStore = new InMemoryAiDecisionAuditStore();
+  const provider = new OpenAiResponsesAiDecisionProvider({
+    endpoint: "http://localhost:1455/v1/responses",
+    apiKey: "test-key",
+    model: "test-model",
+    auditStore,
+    fetchImpl: async () => new Response("sensitive-upstream-request-body", { status: 500 })
+  });
+
+  await provider.decide(context);
+
+  const audit = auditStore.list().find((entry) => entry.providerId === "openai-responses-v1");
+  assert.equal(audit?.status, "decision_fallback");
+  assert.doesNotMatch(audit?.reason ?? "", /sensitive-upstream-request-body/);
+  assert.match(audit?.reason ?? "", /500/);
 }
 
 async function testApiProviderUsesVersionedEnvelopeAndWritesAudit() {
@@ -206,6 +319,9 @@ async function main() {
   testPublishedJsonSchemaMatchesProtocolVersion();
   testAuditStoreIsBoundedAndContainsOnlyMetadata();
   testConfiguredProviderReadsEnvironmentAtCreationTime();
+  await testResponsesProviderExtractsProtocolEnvelope();
+  await testResponsesProviderFallsBackOnNonJsonOutput();
+  await testResponsesProviderDoesNotAuditRemoteErrorBody();
   await testApiProviderUsesVersionedEnvelopeAndWritesAudit();
   await testApiProtocolMismatchFallsBackAndAuditsReason();
   await testProviderReceivesPlayerSafeContextAndExecutesServerCommand();
