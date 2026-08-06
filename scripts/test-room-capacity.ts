@@ -78,9 +78,29 @@ function testReplacementPlayerKeepsColorUnique() {
   assert.equal(new Set(room.players.map((player) => player.color)).size, room.players.length);
 }
 
+function testHostControlsRoomWideAiDifficulty() {
+  const manager = new RoomManager();
+  const created = manager.createRoom("房主", "socket-host");
+  const room = requireValue(created.room, "创建房间后应返回房间");
+  const hostId = requireValue(created.playerId, "创建房间后应返回房主 id");
+  assert.equal(room.settings.aiDifficulty, "balanced");
+
+  assert.equal(manager.updateSettings(room.id, hostId, { aiDifficulty: "aggressive" }).ok, true);
+  assert.equal(room.settings.aiDifficulty, "aggressive");
+
+  manager.updateSettings(room.id, hostId, { aiDifficulty: "unknown" as "balanced" });
+  assert.equal(room.settings.aiDifficulty, "aggressive", "非法难度不能覆盖当前设置");
+
+  const guest = manager.joinRoom(room.id, "访客", "socket-guest");
+  const guestId = requireValue(guest.playerId, "访客应有 id");
+  assert.equal(manager.updateSettings(room.id, guestId, { aiDifficulty: "conservative" }).ok, false);
+  assert.equal(room.settings.aiDifficulty, "aggressive");
+}
+
 testEightPlayerRoomWithAiFill();
 testHumanJoinRespectsSharedCapacity();
 testEightPlayersHaveDistinctTokenOffsets();
 testReplacementPlayerKeepsColorUnique();
+testHostControlsRoomWideAiDifficulty();
 
 console.log("Room capacity tests passed.");

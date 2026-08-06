@@ -405,6 +405,37 @@ select:focus {
   background: #2374d8;
 }
 
+.aiDifficultySetting {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(270px, 1.3fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 3px solid rgba(93, 58, 125, 0.28);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.aiDifficultySetting > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.aiDifficultySetting small {
+  color: #665f78;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.aiDifficultyControl {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.aiDifficultyControl button {
+  min-width: 0;
+  padding-inline: 8px;
+}
+
 .settingsGrid {
   display: grid;
   grid-template-columns: 140px 1fr;
@@ -1135,6 +1166,10 @@ select:focus {
   }
 
   .settingsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .aiDifficultySetting {
     grid-template-columns: 1fr;
   }
 }

@@ -767,6 +767,8 @@ export interface RoomPlayer {
   isHost: boolean;
 }
 
+export type AiDifficulty = "conservative" | "balanced" | "aggressive";
+
 export interface GameSettings {
   endCondition: EndCondition;
   maxRounds: number;
@@ -802,6 +804,7 @@ export interface GameSettings {
   useSharedStartTile: boolean;
   lapRewardMode: LapRewardMode;
   turnDurationSeconds: number;
+  aiDifficulty: AiDifficulty;
 }
 
 export interface ChatMessage {

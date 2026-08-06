@@ -8,6 +8,15 @@ import {
 } from "./ai";
 import { autoPlayTimedOutTurn } from "./actions";
 import { projectGameForPlayer } from "./playerView";
+import {
+  defaultAiDecisionAuditStore,
+  type AiDecisionAuditStore
+} from "./aiDecisionAudit";
+import {
+  createAiDecisionRequest,
+  isAiTurnCommand,
+  parseAiDecisionResponse
+} from "./aiProtocol";
 
 export interface AiDecisionContext {
   playerId: PlayerId;
@@ -17,14 +26,27 @@ export interface AiDecisionContext {
 
 export interface AiDecisionProvider {
   readonly id: string;
+  readonly auditStore?: AiDecisionAuditStore | undefined;
   decide(context: AiDecisionContext): Promise<AiTurnCommand>;
 }
 
 export class RuleBasedAiDecisionProvider implements AiDecisionProvider {
   readonly id = "rule-based-v1";
 
+  constructor(readonly auditStore: AiDecisionAuditStore = defaultAiDecisionAuditStore) {}
+
   async decide(context: AiDecisionContext): Promise<AiTurnCommand> {
-    return getAiTurnCommand(context.game);
+    const startedAt = Date.now();
+    const command = getAiTurnCommand(context.game);
+    this.auditStore.record({
+      roomId: context.game.roomId,
+      playerId: context.playerId,
+      providerId: this.id,
+      commandKind: command.kind,
+      status: "decision_success",
+      durationMs: Date.now() - startedAt
+    });
+    return command;
   }
 }
 
@@ -33,62 +55,25 @@ export interface ApiAiDecisionProviderOptions {
   apiKey?: string | undefined;
   timeoutMs?: number | undefined;
   fallback?: AiDecisionProvider | undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object";
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-export function isAiTurnCommand(value: unknown): value is AiTurnCommand {
-  if (!isRecord(value) || !isString(value.kind)) return false;
-  if (value.kind === "none") return typeof value.reason === "string";
-  if (!isString(value.playerId)) return false;
-
-  switch (value.kind) {
-    case "rollDice":
-    case "cancelPortal":
-    case "closeSkillShop":
-    case "skipLottery":
-    case "declareBankruptcy":
-    case "endTurn":
-      return true;
-    case "buyProperty":
-    case "upgradeProperty":
-    case "choosePath":
-    case "mortgageProperty":
-      return isString(value.tileId);
-    case "choosePortal":
-      return isString(value.targetTileId);
-    case "buySkillCard":
-      return isString(value.skillId);
-    case "borrowCredit":
-      return typeof value.amount === "number" && Number.isFinite(value.amount) && value.amount > 0;
-    case "useSkillCard":
-      return isRecord(value.payload) && isString(value.payload.skillId);
-    case "submitStockOrder":
-      return isString(value.stockId)
-        && (value.type === "buy" || value.type === "sell")
-        && typeof value.shares === "number"
-        && Number.isFinite(value.shares)
-        && value.shares > 0;
-    default:
-      return false;
-  }
+  auditStore?: AiDecisionAuditStore | undefined;
+  fetchImpl?: typeof fetch | undefined;
 }
 
 export class ApiAiDecisionProvider implements AiDecisionProvider {
   readonly id = "api-v1";
+  readonly auditStore: AiDecisionAuditStore;
   private readonly fallback: AiDecisionProvider;
+  private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: ApiAiDecisionProviderOptions) {
-    this.fallback = options.fallback ?? new RuleBasedAiDecisionProvider();
+    this.auditStore = options.auditStore ?? defaultAiDecisionAuditStore;
+    this.fallback = options.fallback ?? new RuleBasedAiDecisionProvider(this.auditStore);
+    this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
   async decide(context: AiDecisionContext): Promise<AiTurnCommand> {
+    const startedAt = Date.now();
+    const request = createAiDecisionRequest(context);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(500, this.options.timeoutMs ?? 5000));
     try {
@@ -96,22 +81,41 @@ export class ApiAiDecisionProvider implements AiDecisionProvider {
       if (this.options.apiKey) {
         headers.authorization = `Bearer ${this.options.apiKey}`;
       }
-      const response = await fetch(this.options.endpoint, {
+      const response = await this.fetchImpl(this.options.endpoint, {
         method: "POST",
         headers,
-        body: JSON.stringify(context),
+        body: JSON.stringify(request),
         signal: controller.signal
       });
       if (!response.ok) {
         throw new Error(`AI API returned ${response.status}`);
       }
       const body: unknown = await response.json();
-      const command = isRecord(body) && "command" in body ? body.command : body;
-      if (!isAiTurnCommand(command) || (command.kind !== "none" && command.playerId !== context.playerId)) {
+      const command = parseAiDecisionResponse(body, request.requestId);
+      if (command.kind !== "none" && command.playerId !== context.playerId) {
         throw new Error("AI API returned an invalid command");
       }
+      this.auditStore.record({
+        requestId: request.requestId,
+        roomId: context.game.roomId,
+        playerId: context.playerId,
+        providerId: this.id,
+        commandKind: command.kind,
+        status: "decision_success",
+        durationMs: Date.now() - startedAt
+      });
       return command;
-    } catch {
+    } catch (error) {
+      this.auditStore.record({
+        requestId: request.requestId,
+        roomId: context.game.roomId,
+        playerId: context.playerId,
+        providerId: this.id,
+        commandKind: "none",
+        status: "decision_fallback",
+        durationMs: Date.now() - startedAt,
+        reason: error instanceof Error ? error.message : "Unknown AI provider error"
+      });
       return this.fallback.decide(context);
     } finally {
       clearTimeout(timer);
@@ -163,8 +167,26 @@ export async function runAiTurnStepWithProvider(
 
   const step = executeAiTurnCommand(state, command);
   if (step.outcome?.ok !== false) {
+    provider.auditStore?.record({
+      roomId: state.roomId,
+      playerId,
+      providerId: provider.id,
+      commandKind: command.kind,
+      status: "action_accepted",
+      durationMs: Date.now() - context.requestedAt
+    });
     return step;
   }
+
+  provider.auditStore?.record({
+    roomId: state.roomId,
+    playerId,
+    providerId: provider.id,
+    commandKind: command.kind,
+    status: "action_rejected",
+    durationMs: Date.now() - context.requestedAt,
+    reason: step.outcome.error
+  });
 
   const fallbackCommand = getAiTurnCommand(state);
   const fallbackStep = executeAiTurnCommand(state, fallbackCommand);

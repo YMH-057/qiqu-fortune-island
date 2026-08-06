@@ -35,7 +35,8 @@ export const testSettings: GameSettings = {
   startTileId: "tile-00",
   useSharedStartTile: false,
   lapRewardMode: "go",
-  turnDurationSeconds: 60
+  turnDurationSeconds: 60,
+  aiDifficulty: "balanced"
 };
 
 export function makeTestRoomPlayer(id: string, isBot = false): RoomPlayer {

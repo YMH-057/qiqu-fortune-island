@@ -32,10 +32,9 @@ import { borrowCredit } from "./bank";
 import { isStockTradingDay } from "./calendar";
 import { getUpgradeCost, MAX_PROPERTY_LEVEL } from "./economy";
 import { calculateMortgageValue, mortgageProperty } from "./mortgage";
+import { getAiPolicy, type AiPolicy } from "./aiPolicy";
 
 export const AI_TURN_DELAY_MS = 850;
-const AI_CASH_RESERVE_AFTER_BUY = 2500;
-const AI_CASH_RESERVE_AFTER_UPGRADE = 3500;
 
 export type AiTurnCommand =
   | { kind: "none"; reason: string }
@@ -215,7 +214,7 @@ function skillCommand(player: PlayerState, card: SkillCard, payload: Omit<UseSki
   };
 }
 
-function getAiSkillCommand(state: GameState, player: PlayerState): AiTurnCommand | null {
+function getAiSkillCommand(state: GameState, player: PlayerState, policy: AiPolicy): AiTurnCommand | null {
   const usableCards = player.skillCards.filter((card) => !getSkillConflictReason(player, card));
   const releasePermit = usableCards.find((card) => card.code === "releasePermit");
   const detained = player.skipTurns > 0 || player.statusEffects.some(
@@ -236,6 +235,7 @@ function getAiSkillCommand(state: GameState, player: PlayerState): AiTurnCommand
     .filter((candidate) => candidate.id !== player.id && !candidate.bankrupt)
     .sort((left, right) => right.cash - left.cash);
   for (const card of usableCards) {
+    if (!policy.useAttackSkills) break;
     if (!AI_PLAYER_TARGET_SKILLS.has(card.code)) continue;
     const target = rivals.find((candidate) => {
       const inRange = card.range === undefined
@@ -272,6 +272,7 @@ function getAiSkillCommand(state: GameState, player: PlayerState): AiTurnCommand
     .map((tile) => ({ tile, property: state.properties[tile.id] }))
     .filter((entry) => entry.tile.type === "property" && entry.property?.ownerId && entry.property.ownerId !== player.id);
   for (const card of usableCards) {
+    if (!policy.useAttackSkills) break;
     if (!AI_RIVAL_PROPERTY_SKILLS.has(card.code)) continue;
     const target = rivalProperties.find((entry) =>
       card.range === undefined
@@ -317,7 +318,7 @@ function getAiSkillCommand(state: GameState, player: PlayerState): AiTurnCommand
     : skillCommand(player, safeSelfCard);
 }
 
-function getAiStockCommand(state: GameState, player: PlayerState): AiTurnCommand | null {
+function getAiStockCommand(state: GameState, player: PlayerState, policy: AiPolicy): AiTurnCommand | null {
   if (!isStockTradingDay(state.gameCalendar)) {
     return null;
   }
@@ -350,8 +351,10 @@ function getAiStockCommand(state: GameState, player: PlayerState): AiTurnCommand
   if (!stock) {
     return null;
   }
-  const reserve = 5000;
-  const budget = Math.max(0, Math.min(player.cash * 0.25, player.cash - reserve));
+  const budget = Math.max(
+    0,
+    Math.min(player.cash * policy.stockBudgetRate, player.cash - policy.stockCashReserve)
+  );
   const shares = Math.floor(budget / Math.max(1, stock.currentPrice));
   return shares > 0
     ? { kind: "submitStockOrder", playerId: player.id, stockId: signal.stockId, type: "buy", shares }
@@ -370,18 +373,19 @@ export function getAiTurnCommand(state: GameState): AiTurnCommand {
   if (!player) {
     return { kind: "none", reason: "当前回合玩家不是 AI。" };
   }
+  const policy = getAiPolicy(state.settings.aiDifficulty);
 
   const recovery = getAiRecoveryCommand(state, player);
   if (recovery) {
     return recovery;
   }
 
-  const nextSkillCommand = getAiSkillCommand(state, player);
+  const nextSkillCommand = getAiSkillCommand(state, player, policy);
   if (nextSkillCommand) {
     return nextSkillCommand;
   }
 
-  const stockCommand = getAiStockCommand(state, player);
+  const stockCommand = getAiStockCommand(state, player, policy);
   if (stockCommand) {
     return stockCommand;
   }
@@ -398,7 +402,7 @@ export function getAiTurnCommand(state: GameState): AiTurnCommand {
   if (pending.kind === "buyProperty") {
     const tile = state.tiles.find((item) => item.id === pending.tileId);
     const price = tile?.price ?? 0;
-    if (price > 0 && player.cash - price >= AI_CASH_RESERVE_AFTER_BUY) {
+    if (price > 0 && player.cash - price >= policy.cashReserveAfterBuy) {
       return { kind: "buyProperty", playerId: player.id, tileId: pending.tileId };
     }
     return { kind: "endTurn", playerId: player.id };
@@ -408,7 +412,7 @@ export function getAiTurnCommand(state: GameState): AiTurnCommand {
     const tile = state.tiles.find((item) => item.id === pending.tileId);
     const property = state.properties[pending.tileId];
     const cost = tile && property ? getUpgradeCost(tile, property) : Number.POSITIVE_INFINITY;
-    if (Number.isFinite(cost) && player.cash - cost >= AI_CASH_RESERVE_AFTER_UPGRADE) {
+    if (Number.isFinite(cost) && player.cash - cost >= policy.cashReserveAfterUpgrade) {
       return { kind: "upgradeProperty", playerId: player.id, tileId: pending.tileId };
     }
     return { kind: "endTurn", playerId: player.id };

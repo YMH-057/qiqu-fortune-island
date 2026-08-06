@@ -1,6 +1,6 @@
 import { Bot, Check, Crown, Play, Radio, Save, UserMinus, Users } from "lucide-react";
 import { useState } from "react";
-import { MAX_ROOM_PLAYERS, MIN_ROOM_PLAYERS, START_TILE_OPTIONS, type EndCondition, type GameDurationMode, type GameSettings, type RoomPublicState, type TileId } from "@monopoly/shared";
+import { MAX_ROOM_PLAYERS, MIN_ROOM_PLAYERS, START_TILE_OPTIONS, type AiDifficulty, type EndCondition, type GameDurationMode, type GameSettings, type RoomPublicState, type TileId } from "@monopoly/shared";
 import { AvatarPortrait } from "../components/AvatarPortrait";
 import { AvatarSelectPanel } from "../components/AvatarSelectPanel";
 import { ConnectionHint } from "../components/ConnectionHint";
@@ -31,6 +31,11 @@ export function RoomPage({ room, playerId }: RoomPageProps) {
   function updateDuration(durationMode: GameDurationMode) {
     if (!canEditSettings) return;
     socket.emit("updateSettings", { durationMode, endCondition: "rounds" });
+  }
+
+  function updateAiDifficulty(aiDifficulty: AiDifficulty) {
+    if (!canEditSettings) return;
+    socket.emit("updateSettings", { aiDifficulty });
   }
 
   function updateDraft(key: string, value: string) {
@@ -216,6 +221,30 @@ export function RoomPage({ room, playerId }: RoomPageProps) {
             >
               {t("bankruptcyMode")}
             </button>
+          </div>
+          <div className="aiDifficultySetting">
+            <div>
+              <strong>AI 行动风格</strong>
+              <small>房间内所有 AI 共用，真人操作不受影响。</small>
+            </div>
+            <div className="segmentedControl aiDifficultyControl" aria-label="AI 行动风格">
+              {([
+                ["conservative", "保守", "保留更多现金，不主动使用攻击卡"],
+                ["balanced", "均衡", "经营、技能和股市保持均衡"],
+                ["aggressive", "激进", "更积极买地、升级和股票建仓"]
+              ] as const).map(([value, label, description]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={(room.settings.aiDifficulty ?? "balanced") === value ? "active" : ""}
+                  disabled={!canEditSettings}
+                  onClick={() => updateAiDifficulty(value)}
+                  title={description}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="settingsGrid">
             <label>

@@ -66,7 +66,8 @@ const DEFAULT_SETTINGS: GameSettings = {
   startTileId: "tile-00",
   useSharedStartTile: false,
   lapRewardMode: "go",
-  turnDurationSeconds: 60
+  turnDurationSeconds: 60,
+  aiDifficulty: "balanced"
 };
 
 function makeId(prefix: string, length = 6): string {
@@ -255,6 +256,9 @@ export class RoomManager {
     }
     if (typeof patch.turnDurationSeconds === "number" && Number.isFinite(patch.turnDurationSeconds)) {
       room.settings.turnDurationSeconds = Math.max(15, Math.min(300, Math.floor(patch.turnDurationSeconds)));
+    }
+    if (patch.aiDifficulty === "conservative" || patch.aiDifficulty === "balanced" || patch.aiDifficulty === "aggressive") {
+      room.settings.aiDifficulty = patch.aiDifficulty;
     }
     if (
       patch.durationMode === "short_3_months" ||

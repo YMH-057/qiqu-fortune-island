@@ -31,7 +31,11 @@ import {
   useSkillCard
 } from "./game/actions";
 import { AI_TURN_DELAY_MS, isAiControlledPlayer } from "./game/ai";
-import { createConfiguredAiDecisionProvider, runAiTurnStepWithProvider } from "./game/aiDecisionProvider";
+import {
+  createConfiguredAiDecisionProvider,
+  runAiTurnStepWithProvider,
+  type AiDecisionProvider
+} from "./game/aiDecisionProvider";
 import { projectGameForPlayer } from "./game/playerView";
 import { executeDebugCommand, getDebugCatalog } from "./game/debug";
 import { exchangeMoneyToTickets, exchangeTicketsToMoney } from "./game/exchange";
@@ -54,7 +58,12 @@ type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServer
 type BroadcastOutcome = ActionOutcome;
 
 const turnTimers = new Map<string, NodeJS.Timeout>();
-const aiDecisionProvider = createConfiguredAiDecisionProvider();
+let aiDecisionProvider: AiDecisionProvider | undefined;
+
+function getAiDecisionProvider(): AiDecisionProvider {
+  aiDecisionProvider ??= createConfiguredAiDecisionProvider();
+  return aiDecisionProvider;
+}
 
 function emitError(socket: GameSocket, message: string): void {
   socket.emit("errorMessage", { message });
@@ -138,7 +147,7 @@ function scheduleTurnTimer(io: GameServer, manager: RoomManager, room: RoomRecor
     const freshPlayerId = freshGame.turnOrder[freshGame.currentTurnIndex];
     const freshPlayer = freshPlayerId ? freshGame.players.find((player) => player.id === freshPlayerId) : undefined;
     if (isAiControlledPlayer(freshPlayer)) {
-      const step = await runAiTurnStepWithProvider(freshGame, aiDecisionProvider);
+      const step = await runAiTurnStepWithProvider(freshGame, getAiDecisionProvider());
       if (!step.outcome) {
         scheduleTurnTimer(io, manager, freshRoom);
         return;
@@ -373,6 +382,7 @@ function buildOtherPlayersHoldings(game: GameState, playerId: string): Parameter
 }
 
 export function registerSocketHandlers(io: GameServer): void {
+  aiDecisionProvider = createConfiguredAiDecisionProvider();
   const manager = new RoomManager();
 
   io.on("connection", (socket) => {
