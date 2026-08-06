@@ -638,6 +638,122 @@ export interface PlayerState {
   connected: boolean;
 }
 
+export function getTileGraphDistance(tiles: Tile[], fromTileId: TileId, toTileId: TileId): number {
+  if (fromTileId === toTileId) return 0;
+  const neighbors = new Map<TileId, TileId[]>();
+  for (const tile of tiles) {
+    for (const next of tile.next ?? []) {
+      neighbors.set(tile.id, [...(neighbors.get(tile.id) ?? []), next]);
+      neighbors.set(next, [...(neighbors.get(next) ?? []), tile.id]);
+    }
+  }
+  const queue: Array<{ tileId: TileId; distance: number }> = [{ tileId: fromTileId, distance: 0 }];
+  const seen = new Set<TileId>([fromTileId]);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) break;
+    for (const next of neighbors.get(current.tileId) ?? []) {
+      if (seen.has(next)) continue;
+      if (next === toTileId) return current.distance + 1;
+      seen.add(next);
+      queue.push({ tileId: next, distance: current.distance + 1 });
+    }
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+export const EXCLUSIVE_NEXT_MOVE_SKILL_CODES: readonly SkillCardCode[] = [
+  "remoteDice",
+  "doubleDice",
+  "slowWalk",
+  "preciseStep",
+  "reverseDice"
+];
+
+export const EXCLUSIVE_NEXT_MOVE_STATUS_TYPES: readonly StatusEffectType[] = [
+  "remoteDice",
+  "doubleDice",
+  "slowWalk",
+  "preciseStep",
+  "reverseDice",
+  "slowTrap"
+];
+
+const persistentSkillStatus: Partial<Record<SkillCardCode, StatusEffectType>> = {
+  remoteTrade: "remoteTrade",
+  shield: "rentShield",
+  quickShoes: "extraSteps",
+  luckyCharm: "luckyCharm",
+  lotteryBoost: "lotteryBoost",
+  taxRelief: "taxShield",
+  repairKit: "repairKit",
+  junctionBlessing: "junctionBlessing",
+  smallLoan: "smallLoan",
+  interestFreeRedeem: "interestFreeRedeem",
+  setAccelerator: "setAccelerator",
+  lotteryCombo: "lotteryCombo",
+  lotteryGuarantee: "lotteryGuarantee",
+  stockFreeCommission: "stockFreeCommission",
+  stockStopLoss: "stockStopLoss",
+  stockBuyCoupon: "stockBuyCoupon",
+  shortGoggles: "stockSellCoupon",
+  vacantGuide: "vacantGuide",
+  rentDiscountTicket: "rentDiscountTicket",
+  repairDiscount: "repairDiscount",
+  taxDelay: "taxDelay",
+  shopDiscount: "shopDiscount",
+  portalDiscount: "portalDiscount",
+  counterShield: "counterShield",
+  reverseCompass: "reverseWalk",
+  routeToken: "routeChoice",
+  junctionCompass: "routeChoice",
+  outerRoutePass: "forceOuterRoute",
+  innerRoutePass: "forceInnerRoute",
+  holidayVoucher: "rentHoliday",
+  debtExtension: "debtExtension",
+  lotteryPack: "lotteryPack",
+  luckyNumber: "luckyNumber",
+  medicalInsurance: "medicalInsurance",
+  bailPermit: "bailPermit"
+};
+
+/** Returns a player-facing reason when a persistent skill would overwrite an active effect. */
+export function getSkillConflictReason(
+  player: Pick<PlayerState, "statusEffects">,
+  card: Pick<SkillCard, "code">
+): string | null {
+  const activeTypes = new Set(
+    player.statusEffects.filter((effect) => effect.turns > 0).map((effect) => effect.type)
+  );
+
+  if (
+    EXCLUSIVE_NEXT_MOVE_SKILL_CODES.includes(card.code)
+    && EXCLUSIVE_NEXT_MOVE_STATUS_TYPES.some((type) => activeTypes.has(type))
+  ) {
+    return "已有下一次移动类效果，不能叠加另一张会改变骰子或移动方式的技能卡。";
+  }
+
+  if (
+    (card.code === "outerRoutePass" || card.code === "innerRoutePass")
+    && (activeTypes.has("forceOuterRoute") || activeTypes.has("forceInnerRoute") || activeTypes.has("routeChoice"))
+  ) {
+    return "已有路线类效果，不能叠加相互冲突的内圈、外圈或选路效果。";
+  }
+
+  if (
+    (card.code === "routeToken" || card.code === "junctionCompass")
+    && (activeTypes.has("routeChoice") || activeTypes.has("forceOuterRoute") || activeTypes.has("forceInnerRoute"))
+  ) {
+    return "已有路线类效果，请先使用完当前路线效果。";
+  }
+
+  const statusType = persistentSkillStatus[card.code];
+  if (statusType && activeTypes.has(statusType)) {
+    return "同类持续效果已经生效，不能重复使用并覆盖剩余时间。";
+  }
+  return null;
+}
+
 export interface RoomPlayer {
   id: PlayerId;
   nickname: string;

@@ -12,6 +12,7 @@ import type {
   StockTradeRecord
 } from "@monopoly/shared";
 import { getCurrentMonthMarketTheme, getMonthLength, isStockTradingDay } from "./calendar";
+import { appendGameLog } from "./gameLog";
 
 export interface StockTradeResult {
   ok: boolean;
@@ -271,9 +272,8 @@ function stockFeeMultiplier(gameState: GameState, playerId: PlayerId, side: "buy
   if (!player) {
     return 1;
   }
-  const freeIndex = player.statusEffects.findIndex((item) => item.type === "stockFreeCommission" && item.turns > 0);
-  if (freeIndex >= 0) {
-    player.statusEffects.splice(freeIndex, 1);
+  const hasFreeCommission = player.statusEffects.some((item) => item.type === "stockFreeCommission" && item.turns > 0);
+  if (hasFreeCommission) {
     return 0;
   }
   const buyCouponIndex = side === "buy"
@@ -530,6 +530,10 @@ export function settleDailyStockOrders(gameState: GameState): { ok: boolean; rec
     }
   }
 
+  // One pass covers every net order in this close, then expires before the next trading day.
+  for (const player of gameState.players) {
+    player.statusEffects = player.statusEffects.filter((effect) => effect.type !== "stockFreeCommission");
+  }
   gameState.pendingStockOrders = otherOrders;
   updatePlayerStockAccounts(gameState);
   return { ok: true, records };
@@ -795,6 +799,10 @@ export function updateStockMarketDaily(gameState: GameState): void {
       if (stock && holding) {
         const compensation = roundMoney(Math.abs(stock.change) * holding.shares * 0.5);
         player.cash += compensation;
+        appendGameLog(
+          gameState,
+          `${player.nickname} 的股票止损生效：${stock.name} 大跌，获得 ${compensation} 金币补偿。`
+        );
       }
       player.statusEffects.splice(stopLossIndex, 1);
     }

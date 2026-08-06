@@ -1,6 +1,17 @@
-import type { CSSProperties } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { GameState, PlayerState, Tile, TileId, TileType } from "@monopoly/shared";
+import {
+  BOARD_HEIGHT,
+  BOARD_WIDTH,
+  DEFAULT_FOLLOW_SCALE,
+  cameraMagnification,
+  clampFollowScale,
+  getBoardViewBox,
+  pointToViewportPercent,
+  type BoardCameraMode,
+  type BoardPoint,
+  type BoardViewBox
+} from "../game/boardCamera";
 import { getPlayerTokenOffset } from "../game/playerTokenLayout";
 import { useI18n } from "../i18n";
 import { PlayerToken } from "./PlayerToken";
@@ -13,10 +24,7 @@ interface GraphBoardProps {
   onSelectTile: (tileId: TileId) => void;
 }
 
-type BoardPoint = { x: number; y: number };
-
-export const BOARD_WIDTH = 1000;
-export const BOARD_HEIGHT = 720;
+export { BOARD_HEIGHT, BOARD_WIDTH } from "../game/boardCamera";
 export const TILE_WIDTH = 44;
 export const TILE_HEIGHT = 34;
 export const MIN_TILE_CENTER_DISTANCE = 48;
@@ -190,22 +198,25 @@ function GraphToken({
   index,
   currentPlayerId,
   localPlayerId,
-  tile
+  tile,
+  viewBox
 }: {
   player: PlayerState;
   index: number;
   currentPlayerId: string | null;
   localPlayerId: string | null;
   tile: Tile;
+  viewBox: BoardViewBox;
 }) {
   const point = pointFor(tile);
+  const viewportPoint = pointToViewportPercent(point, viewBox);
   const offset = getPlayerTokenOffset(index);
   return (
     <div
       className="graphToken"
       style={{
-        left: `${(point.x / BOARD_WIDTH) * 100}%`,
-        top: `${(point.y / BOARD_HEIGHT) * 100}%`
+        left: `${viewportPoint.left}%`,
+        top: `${viewportPoint.top}%`
       }}
     >
       <PlayerToken
@@ -227,7 +238,10 @@ export function GraphBoard({
   onSelectTile
 }: GraphBoardProps) {
   const { t } = useI18n();
-  const [zoomLevel, setZoomLevel] = useState(0.94);
+  const [cameraMode, setCameraMode] = useState<BoardCameraMode>("follow");
+  const [followScale, setFollowScale] = useState(DEFAULT_FOLLOW_SCALE);
+  const [viewportAspect, setViewportAspect] = useState(BOARD_WIDTH / BOARD_HEIGHT);
+  const boardRef = useRef<HTMLDivElement | null>(null);
   const [hoveredTileId, setHoveredTileId] = useState<TileId | null>(null);
   const currentPlayerId = game.turnOrder[game.currentTurnIndex] ?? null;
   const currentPlayer = game.players.find((player) => player.id === currentPlayerId) ?? null;
@@ -238,25 +252,78 @@ export function GraphBoard({
   const choiceIds = useMemo(() => new Set(localPendingChoice?.options.map((option) => option.tileId) ?? []), [localPendingChoice]);
   const tileById = useMemo(() => new Map(game.tiles.map((tile) => [tile.id, tile])), [game.tiles]);
   const hoveredTile = hoveredTileId ? tileById.get(hoveredTileId) ?? null : null;
-  const zoomClass = zoomLevel < 0.8 ? "zoomSmall" : zoomLevel < 1.2 ? "zoomMedium" : "zoomLarge";
+  const localPlayer = localPlayerId ? game.players.find((player) => player.id === localPlayerId) ?? null : null;
+  const localAnimatedIndex = localPlayer ? animatedPositions[localPlayer.id] ?? localPlayer.position : null;
+  const localFocusTile = localPlayer
+    ? game.tiles.find((tile) => tile.index === localAnimatedIndex) ?? tileById.get(localPlayer.currentTileId) ?? null
+    : null;
+  const effectiveCameraMode: BoardCameraMode = localFocusTile ? cameraMode : "overview";
+  const focusPoint = localFocusTile ? pointFor(localFocusTile) : { x: BOARD_WIDTH / 2, y: BOARD_HEIGHT / 2 };
+  const viewBox = getBoardViewBox(effectiveCameraMode, focusPoint, followScale, viewportAspect);
+  const magnification = cameraMagnification(effectiveCameraMode, followScale);
+  const zoomClass = magnification < 1.2 ? "zoomMedium" : "zoomLarge";
+
+  function zoomIn() {
+    setCameraMode("follow");
+    setFollowScale((value) => clampFollowScale(Math.round((value - 0.06) * 100) / 100));
+  }
+
+  function zoomOut() {
+    setCameraMode("follow");
+    setFollowScale((value) => clampFollowScale(Math.round((value + 0.06) * 100) / 100));
+  }
 
   useEffect(() => {
     validateBoardLayout(game.tiles);
   }, [game.tiles]);
 
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+    const updateAspect = () => {
+      const { width, height } = board.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return;
+      const nextAspect = width / height;
+      setViewportAspect((current) => (Math.abs(current - nextAspect) > 0.005 ? nextAspect : current));
+    };
+    updateAspect();
+    const observer = new ResizeObserver(updateAspect);
+    observer.observe(board);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className="graphBoardWrap">
       <div className="mapToolbar">
-        <button onClick={() => setZoomLevel((value) => Math.max(0.75, Math.round((value - 0.1) * 100) / 100))}>
+        <button
+          type="button"
+          className={`cameraModeButton ${effectiveCameraMode === "follow" ? "active" : ""}`}
+          onClick={() => setCameraMode("follow")}
+          disabled={!localFocusTile}
+        >
+          {t("cameraFollow")}
+        </button>
+        <button
+          type="button"
+          className={`cameraModeButton ${effectiveCameraMode === "overview" ? "active" : ""}`}
+          onClick={() => setCameraMode("overview")}
+        >
+          {t("cameraOverview")}
+        </button>
+        <button type="button" onClick={zoomOut} aria-label={t("cameraZoomOut")}>
           -
         </button>
-        <span>{Math.round(zoomLevel * 100)}%</span>
-        <button onClick={() => setZoomLevel((value) => Math.min(1.25, Math.round((value + 0.1) * 100) / 100))}>
+        <span>{Math.round(magnification * 100)}%</span>
+        <button type="button" onClick={zoomIn} aria-label={t("cameraZoomIn")}>
           +
         </button>
       </div>
-      <div className={`graphBoard ${zoomClass}`} style={{ "--map-zoom": zoomLevel } as CSSProperties}>
-        <svg className="graphMap" viewBox={`0 0 ${BOARD_WIDTH} ${BOARD_HEIGHT}`} aria-label={t("appName")}>
+      <div ref={boardRef} className={`graphBoard ${zoomClass} camera-${effectiveCameraMode}`}>
+        <svg
+          className="graphMap"
+          viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
+          aria-label={t("appName")}
+        >
           <defs>
             <filter id="puffyShadow" x="-20%" y="-20%" width="140%" height="140%">
               <feDropShadow dx="0" dy="4" stdDeviation="3" floodColor="#3d3560" floodOpacity="0.26" />
@@ -309,7 +376,7 @@ export function GraphBoard({
               isCurrentTile={tile.id === currentPlayer?.currentTileId}
               isSelected={tile.id === selectedTileId}
               isHovered={tile.id === hoveredTileId}
-              zoomLevel={zoomLevel}
+              zoomLevel={magnification}
               onSelect={onSelectTile}
               onHover={setHoveredTileId}
             />
@@ -319,10 +386,10 @@ export function GraphBoard({
         {hoveredTile && (
           <div
             className="mapHoverLabel"
-            style={{
-              left: `${(pointFor(hoveredTile).x / BOARD_WIDTH) * 100}%`,
-              top: `${(pointFor(hoveredTile).y / BOARD_HEIGHT) * 100}%`
-            }}
+            style={(() => {
+              const viewportPoint = pointToViewportPercent(pointFor(hoveredTile), viewBox);
+              return { left: `${viewportPoint.left}%`, top: `${viewportPoint.top}%` };
+            })()}
           >
             {hoveredTile.shortName ?? hoveredTile.name}
           </div>
@@ -343,6 +410,7 @@ export function GraphBoard({
                 currentPlayerId={currentPlayerId}
                 localPlayerId={localPlayerId}
                 tile={tile}
+                viewBox={viewBox}
               />
             );
           })}

@@ -30,7 +30,9 @@ import {
   upgradeProperty,
   useSkillCard
 } from "./game/actions";
-import { AI_TURN_DELAY_MS, isAiControlledPlayer, runAiTurnStep } from "./game/ai";
+import { AI_TURN_DELAY_MS, isAiControlledPlayer } from "./game/ai";
+import { createConfiguredAiDecisionProvider, runAiTurnStepWithProvider } from "./game/aiDecisionProvider";
+import { projectGameForPlayer } from "./game/playerView";
 import { executeDebugCommand, getDebugCatalog } from "./game/debug";
 import { exchangeMoneyToTickets, exchangeTicketsToMoney } from "./game/exchange";
 import { borrowCredit, depositMoney, leaveDetention, repayCredit, withdrawMoney } from "./game/bank";
@@ -52,6 +54,7 @@ type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServer
 type BroadcastOutcome = ActionOutcome;
 
 const turnTimers = new Map<string, NodeJS.Timeout>();
+const aiDecisionProvider = createConfiguredAiDecisionProvider();
 
 function emitError(socket: GameSocket, message: string): void {
   socket.emit("errorMessage", { message });
@@ -82,22 +85,13 @@ function hasLiveSocket(player: RoomRecord["players"][number]): boolean {
   return !player.isBot && Boolean(player.socketId) && !player.socketId.startsWith("bot:");
 }
 
-function gameForPlayer(game: GameState, playerId: string): GameState {
-  return {
-    ...game,
-    marketSignals: (game.marketSignals ?? []).filter(
-      (signal) => signal.isPublic || signal.ownerPlayerId === playerId
-    )
-  };
-}
-
 function emitGame(io: GameServer, room: RoomRecord): void {
   if (room.game) {
     for (const player of room.players) {
       if (!hasLiveSocket(player)) {
         continue;
       }
-      io.to(player.socketId).emit("gameStateUpdated", gameForPlayer(room.game, player.id));
+      io.to(player.socketId).emit("gameStateUpdated", projectGameForPlayer(room.game, player.id));
     }
   }
 }
@@ -110,7 +104,7 @@ function emitGameStarted(io: GameServer, room: RoomRecord): void {
     if (!hasLiveSocket(player)) {
       continue;
     }
-    const game = gameForPlayer(room.game, player.id);
+    const game = projectGameForPlayer(room.game, player.id);
     io.to(player.socketId).emit("gameStarted", game);
     io.to(player.socketId).emit("gameStateUpdated", game);
   }
@@ -134,7 +128,7 @@ function scheduleTurnTimer(io: GameServer, manager: RoomManager, room: RoomRecor
   const currentPlayer = currentPlayerId ? game.players.find((player) => player.id === currentPlayerId) : undefined;
   const isAiTurn = isAiControlledPlayer(currentPlayer);
   const delay = isAiTurn ? AI_TURN_DELAY_MS : Math.max(250, game.turnEndsAt - Date.now());
-  const timer = setTimeout(() => {
+  const timer = setTimeout(async () => {
     const freshRoom = manager.getRoom(room.id);
     const freshGame = freshRoom?.game;
     if (!freshRoom || !freshGame || freshGame.status !== "playing") {
@@ -144,7 +138,7 @@ function scheduleTurnTimer(io: GameServer, manager: RoomManager, room: RoomRecor
     const freshPlayerId = freshGame.turnOrder[freshGame.currentTurnIndex];
     const freshPlayer = freshPlayerId ? freshGame.players.find((player) => player.id === freshPlayerId) : undefined;
     if (isAiControlledPlayer(freshPlayer)) {
-      const step = runAiTurnStep(freshGame);
+      const step = await runAiTurnStepWithProvider(freshGame, aiDecisionProvider);
       if (!step.outcome) {
         scheduleTurnTimer(io, manager, freshRoom);
         return;
@@ -254,11 +248,17 @@ function broadcastOutcome(
   }
 
   if (outcome.stockAccount) {
-    io.to(room.id).emit("stockAccountUpdated", outcome.stockAccount);
+    const target = room.players.find((player) => player.id === outcome.stockAccount?.playerId);
+    if (target && hasLiveSocket(target)) {
+      io.to(target.socketId).emit("stockAccountUpdated", outcome.stockAccount);
+    }
   }
 
   if (outcome.stockTradeFailed) {
-    io.to(room.id).emit("stockTradeFailed", outcome.stockTradeFailed);
+    const target = room.players.find((player) => player.id === outcome.stockTradeFailed?.playerId);
+    if (target && hasLiveSocket(target)) {
+      io.to(target.socketId).emit("stockTradeFailed", outcome.stockTradeFailed);
+    }
   }
 
   if (outcome.stockOrder) {
@@ -278,14 +278,17 @@ function broadcastOutcome(
   }
 
   if (outcome.stockOrderCanceled) {
-    io.to(room.id).emit("stockOrderCanceled", {
-      playerId: outcome.stockOrderCanceled.playerId,
-      orderId: outcome.stockOrderCanceled.orderId
-    });
-    io.to(room.id).emit("pendingStockOrdersUpdated", {
-      playerId: outcome.stockOrderCanceled.playerId,
-      orders: outcome.stockOrderCanceled.account.pendingOrders
-    });
+    const target = room.players.find((player) => player.id === outcome.stockOrderCanceled?.playerId);
+    if (target && hasLiveSocket(target)) {
+      io.to(target.socketId).emit("stockOrderCanceled", {
+        playerId: outcome.stockOrderCanceled.playerId,
+        orderId: outcome.stockOrderCanceled.orderId
+      });
+      io.to(target.socketId).emit("pendingStockOrdersUpdated", {
+        playerId: outcome.stockOrderCanceled.playerId,
+        orders: outcome.stockOrderCanceled.account.pendingOrders
+      });
+    }
   }
 
   if (outcome.stockSettlement) {
@@ -459,12 +462,12 @@ export function registerSocketHandlers(io: GameServer): void {
         reconnectToken: result.reconnectToken
       };
       if (result.room.game) {
-        response.game = gameForPlayer(result.room.game, result.playerId);
+        response.game = projectGameForPlayer(result.room.game, result.playerId);
       }
       ack?.(response);
       emitRoom(io, manager, result.room);
       if (result.room.game) {
-        socket.emit("gameStateUpdated", gameForPlayer(result.room.game, result.playerId));
+        socket.emit("gameStateUpdated", projectGameForPlayer(result.room.game, result.playerId));
       }
     });
 

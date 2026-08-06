@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { createGameState } from "../server/src/game/createGameState";
 import { getAiTurnCommand, isAiControlledPlayer, runAiTurnStep } from "../server/src/game/ai";
 import { skillCardTemplates } from "../server/src/data/skillCards";
+import { makeSkillCard } from "../server/src/data/skillCards";
+import { createDirectedStockSignal } from "../server/src/game/stockTileEffects";
 import { START_TILE_OPTIONS, type GameSettings, type RoomPlayer } from "@monopoly/shared";
 
 const baseSettings: GameSettings = {
@@ -69,6 +71,76 @@ function testWaitingRollCommand() {
   game.phase = "waitingRoll";
   const command = getAiTurnCommand(game);
   assert.deepEqual(command, { kind: "rollDice", playerId: "AI-001" });
+}
+
+function testAiUsesUsefulSkillBeforeRolling() {
+  const game = createGameState("ROOMAI", [makeRoomPlayer("P-HUMAN", false), makeRoomPlayer("AI-001", true)], baseSettings);
+  const bot = game.players.find((player) => player.id === "AI-001");
+  const template = skillCardTemplates.find((card) => card.code === "bankVoucher");
+  assert.ok(bot);
+  assert.ok(template);
+  game.turnOrder = [bot.id, "P-HUMAN"];
+  game.currentTurnIndex = 0;
+  game.phase = "waitingRoll";
+  bot.cash = 1000;
+  const voucher = makeSkillCard(template, "ai-voucher-test");
+  bot.skillCards.push(voucher);
+
+  assert.deepEqual(getAiTurnCommand(game), {
+    kind: "useSkillCard",
+    playerId: bot.id,
+    payload: { skillId: voucher.id }
+  });
+  const step = runAiTurnStep(game);
+  assert.equal(step.outcome?.ok, true);
+  assert.equal(bot.cash, 1500);
+  assert.equal(bot.skillCards.some((card) => card.id === voucher.id), false);
+}
+
+function testAiTradesFromPrivateGuaranteedSignal() {
+  const game = createGameState("ROOMAI", [makeRoomPlayer("P-HUMAN", false), makeRoomPlayer("AI-001", true)], baseSettings);
+  const bot = game.players.find((player) => player.id === "AI-001");
+  const stockId = Object.keys(game.stocks)[0] as keyof typeof game.stocks;
+  assert.ok(bot);
+  game.turnOrder = [bot.id, "P-HUMAN"];
+  game.currentTurnIndex = 0;
+  game.phase = "waitingRoll";
+  bot.cash = 20000;
+  game.marketSignals.push(createDirectedStockSignal(game, stockId, "bullish", bot.id));
+
+  const command = getAiTurnCommand(game);
+  assert.equal(command.kind, "submitStockOrder");
+  if (command.kind !== "submitStockOrder") throw new Error("expected stock order command");
+  assert.equal(command.stockId, stockId);
+  assert.equal(command.type, "buy");
+  assert.ok(command.shares > 0);
+
+  const step = runAiTurnStep(game);
+  assert.equal(step.outcome?.ok, true);
+  assert.equal(game.pendingStockOrders.some((order) => order.playerId === bot.id && order.stockId === stockId), true);
+}
+
+function testAiSelectsAValidOpponentForAttackSkill() {
+  const game = createGameState("ROOMAI", [makeRoomPlayer("P-HUMAN", false), makeRoomPlayer("AI-001", true)], baseSettings);
+  const bot = game.players.find((player) => player.id === "AI-001");
+  const human = game.players.find((player) => player.id === "P-HUMAN");
+  const template = skillCardTemplates.find((card) => card.code === "freeze");
+  assert.ok(bot);
+  assert.ok(human);
+  assert.ok(template);
+  game.turnOrder = [bot.id, human.id];
+  game.currentTurnIndex = 0;
+  game.phase = "waitingRoll";
+  human.currentTileId = bot.currentTileId;
+  human.position = bot.position;
+  const freeze = makeSkillCard(template, "ai-freeze-test");
+  bot.skillCards.push(freeze);
+
+  assert.deepEqual(getAiTurnCommand(game), {
+    kind: "useSkillCard",
+    playerId: bot.id,
+    payload: { skillId: freeze.id, targetPlayerId: human.id }
+  });
 }
 
 function testBuyPropertyCommandKeepsReserve() {
@@ -261,6 +333,9 @@ function testEightAiPlayersCompleteTwoTurnCycles() {
 
 testBotFlagDetection();
 testWaitingRollCommand();
+testAiUsesUsefulSkillBeforeRolling();
+testAiTradesFromPrivateGuaranteedSignal();
+testAiSelectsAValidOpponentForAttackSkill();
 testBuyPropertyCommandKeepsReserve();
 testAiMortgagesPropertyWhenCreditIsExhausted();
 testExpiredAiInsolvencyCannotStallWhenVoluntaryBankruptcyIsDisabled();

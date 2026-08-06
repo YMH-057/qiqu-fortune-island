@@ -55,8 +55,10 @@ function rentPreview(game: GameState, tileId: TileId, overrideLevel?: number): n
         })
       : false;
   const groupMultiplier = groupComplete ? group?.rentMultiplierWhenComplete ?? 1 : 1;
-  const statusMultiplier = property.rentBoostTurns && property.rentBoostTurns > 0 ? 1.4 : 1;
-  return Math.round(baseRent * Math.min(50, levelMultiplier * groupMultiplier * statusMultiplier));
+  const boostMultiplier = property.rentBoostTurns && property.rentBoostTurns > 0 ? 1.5 : 1;
+  const cutMultiplier = property.rentCutTurns && property.rentCutTurns > 0 ? 0.5 : 1;
+  const totalMultiplier = Math.min(50, levelMultiplier * groupMultiplier * boostMultiplier * cutMultiplier);
+  return Math.max(0, Math.round(baseRent * totalMultiplier + (property.rentHornBonus ?? 0)));
 }
 
 function mortgageValue(price: number | undefined): number {

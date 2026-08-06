@@ -43,6 +43,53 @@ function targetDate(gameState: GameState) {
   return nextTradingDate(gameState.gameCalendar);
 }
 
+function sameTargetDate(
+  left: MarketSignal["targetDate"],
+  right: MarketSignal["targetDate"]
+): boolean {
+  return left.year === right.year && left.month === right.month && left.day === right.day;
+}
+
+function signalScopesOverlap(
+  gameState: GameState,
+  existing: MarketSignal,
+  stockId?: StockId,
+  sector?: StockSector
+): boolean {
+  if (existing.stockId && stockId) {
+    return existing.stockId === stockId;
+  }
+  if (existing.sector && sector) {
+    return existing.sector === sector;
+  }
+  if (existing.stockId && sector) {
+    return gameState.stocks[existing.stockId]?.sector === sector;
+  }
+  if (existing.sector && stockId) {
+    return gameState.stocks[stockId]?.sector === existing.sector;
+  }
+  return false;
+}
+
+function consistentGuaranteedDirection(
+  gameState: GameState,
+  date: MarketSignal["targetDate"],
+  stockId: StockId | undefined,
+  sector: StockSector | undefined,
+  proposed: Extract<MarketSignal["direction"], "bullish" | "bearish">
+): Extract<MarketSignal["direction"], "bullish" | "bearish"> {
+  const existing = gameState.marketSignals.find((signal) =>
+    !signal.used
+    && signal.accuracy >= 1
+    && (signal.direction === "bullish" || signal.direction === "bearish")
+    && sameTargetDate(signal.targetDate, date)
+    && signalScopesOverlap(gameState, signal, stockId, sector)
+  );
+  return existing?.direction === "bullish" || existing?.direction === "bearish"
+    ? existing.direction
+    : proposed;
+}
+
 export function createMarketSignal(
   gameState: GameState,
   source: MarketSignal["source"],
@@ -55,7 +102,7 @@ export function createMarketSignal(
   const stock = Math.random() < stockChance ? randomItem(stocks) : null;
   const sector = stock ? undefined : randomItem(sectors);
   const directionRoll = Math.random();
-  const direction: MarketSignal["direction"] =
+  const proposedDirection: MarketSignal["direction"] =
     isPrivateSignal || stronger
       ? directionRoll < 0.5
         ? "bullish"
@@ -67,6 +114,10 @@ export function createMarketSignal(
           : directionRoll < 0.99
             ? "volatile"
             : "stable";
+  const nextDate = targetDate(gameState);
+  const direction = isPrivateSignal && (proposedDirection === "bullish" || proposedDirection === "bearish")
+    ? consistentGuaranteedDirection(gameState, nextDate, stock?.id, sector, proposedDirection)
+    : proposedDirection;
   const label = stock ? stock.name : `${sectorNames[sector ?? "tech"]}行业`;
   const directionText: Record<MarketSignal["direction"], string> = {
     bullish: "上涨",
@@ -81,7 +132,7 @@ export function createMarketSignal(
     direction,
     strength: stronger || isPrivateSignal ? 0.065 : 0.038,
     accuracy: isPrivateSignal ? 1 : stronger ? 0.85 : 0.68,
-    targetDate: targetDate(gameState),
+    targetDate: nextDate,
     source,
     message: `情报显示：${label} 下个交易日可能${directionText[direction]}。`,
     isPublic: !isPrivateSignal,
@@ -98,14 +149,16 @@ export function createDirectedStockSignal(
 ): MarketSignal {
   const stocks = Object.values(gameState.stocks);
   const stock = (stockId ? gameState.stocks[stockId] : undefined) ?? randomItem(stocks);
-  const directionText = direction === "bullish" ? "上涨" : "下跌";
+  const nextDate = targetDate(gameState);
+  const consistentDirection = consistentGuaranteedDirection(gameState, nextDate, stock.id, undefined, direction);
+  const directionText = consistentDirection === "bullish" ? "上涨" : "下跌";
   return {
     id: uid("signal"),
     stockId: stock.id,
-    direction,
+    direction: consistentDirection,
     strength: 0.075,
     accuracy: 1,
-    targetDate: targetDate(gameState),
+    targetDate: nextDate,
     source,
     message: `情报显示：${stock.name} 下个交易日可能${directionText}。`,
     isPublic: false,

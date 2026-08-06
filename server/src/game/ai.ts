@@ -1,4 +1,16 @@
-import type { GameState, PendingAction, PlayerId, PlayerState, SkillCard, TileId } from "@monopoly/shared";
+import {
+  getSkillConflictReason,
+  getTileGraphDistance,
+  type GameState,
+  type PendingAction,
+  type PlayerId,
+  type PlayerState,
+  type SkillCard,
+  type SkillCardCode,
+  type StockId,
+  type TileId,
+  type UseSkillPayload
+} from "@monopoly/shared";
 import {
   type ActionOutcome,
   autoPlayTimedOutTurn,
@@ -12,10 +24,13 @@ import {
   endTurn,
   rollDice,
   skipLottery,
+  submitStockOrderAction,
+  useSkillCard,
   upgradeProperty
 } from "./actions";
 import { borrowCredit } from "./bank";
-import { getUpgradeCost } from "./economy";
+import { isStockTradingDay } from "./calendar";
+import { getUpgradeCost, MAX_PROPERTY_LEVEL } from "./economy";
 import { calculateMortgageValue, mortgageProperty } from "./mortgage";
 
 export const AI_TURN_DELAY_MS = 850;
@@ -36,6 +51,8 @@ export type AiTurnCommand =
   | { kind: "borrowCredit"; playerId: PlayerId; amount: number }
   | { kind: "mortgageProperty"; playerId: PlayerId; tileId: TileId }
   | { kind: "declareBankruptcy"; playerId: PlayerId }
+  | { kind: "useSkillCard"; playerId: PlayerId; payload: UseSkillPayload }
+  | { kind: "submitStockOrder"; playerId: PlayerId; stockId: StockId; type: "buy" | "sell"; shares: number }
   | { kind: "endTurn"; playerId: PlayerId };
 
 export interface AiTurnStepResult {
@@ -132,6 +149,215 @@ function getAiRecoveryCommand(state: GameState, player: PlayerState): AiTurnComm
   return { kind: "declareBankruptcy", playerId: player.id };
 }
 
+const AI_PLAYER_TARGET_SKILLS = new Set<SkillCardCode>([
+  "freeze",
+  "steal",
+  "slowTrap",
+  "junctionInterference",
+  "equalizePoor",
+  "equalizeRich",
+  "missile",
+  "roadblock",
+  "bomb",
+  "landlordHoliday",
+  "auditBill"
+]);
+
+const AI_OWN_PROPERTY_SKILLS = new Set<SkillCardCode>([
+  "rentBoost",
+  "propertyInsurance",
+  "temporaryRentRaise",
+  "rentHorn",
+  "popUpBooth",
+  "renovationTeam",
+  "angelCard",
+  "valueBoostCard"
+]);
+
+const AI_RIVAL_PROPERTY_SKILLS = new Set<SkillCardCode>([
+  "temporaryRentCut",
+  "mortgageFreeze",
+  "demolishCard",
+  "devilCard",
+  "rentLimitOrder"
+]);
+
+const AI_SAFE_SELF_SKILLS = new Set<SkillCardCode>([
+  "bankVoucher",
+  "coinRain",
+  "coinRedPacket",
+  "ticketRedPacket",
+  "cardSupply",
+  "shield",
+  "quickShoes",
+  "remoteDice",
+  "doubleDice",
+  "luckyCharm",
+  "taxRelief",
+  "repairKit",
+  "holidayVoucher",
+  "counterShield",
+  "routeToken",
+  "junctionCompass",
+  "stockHint",
+  "marketFlash",
+  "marketMagnifier",
+  "stockFreeCommission",
+  "medicalInsurance",
+  "bailPermit"
+]);
+
+function skillCommand(player: PlayerState, card: SkillCard, payload: Omit<UseSkillPayload, "skillId"> = {}): AiTurnCommand {
+  return {
+    kind: "useSkillCard",
+    playerId: player.id,
+    payload: { skillId: card.id, ...payload }
+  };
+}
+
+function getAiSkillCommand(state: GameState, player: PlayerState): AiTurnCommand | null {
+  const usableCards = player.skillCards.filter((card) => !getSkillConflictReason(player, card));
+  const releasePermit = usableCards.find((card) => card.code === "releasePermit");
+  const detained = player.skipTurns > 0 || player.statusEffects.some(
+    (effect) => (effect.type === "jail" || effect.type === "hospital") && effect.turns > 0
+  );
+  if (detained && releasePermit) {
+    return skillCommand(player, releasePermit);
+  }
+
+  const bankVoucher = player.cash < 5000
+    ? usableCards.find((card) => card.code === "bankVoucher")
+    : undefined;
+  if (bankVoucher) {
+    return skillCommand(player, bankVoucher);
+  }
+
+  const rivals = state.players
+    .filter((candidate) => candidate.id !== player.id && !candidate.bankrupt)
+    .sort((left, right) => right.cash - left.cash);
+  for (const card of usableCards) {
+    if (!AI_PLAYER_TARGET_SKILLS.has(card.code)) continue;
+    const target = rivals.find((candidate) => {
+      const inRange = card.range === undefined
+        || getTileGraphDistance(state.tiles, player.currentTileId, candidate.currentTileId) <= card.range;
+      if (!inRange) return false;
+      if (card.code === "equalizePoor" || card.code === "equalizeRich") return candidate.cash > player.cash;
+      if (card.code === "steal") return candidate.cash > 0;
+      if (card.code === "landlordHoliday") return candidate.properties.length > 0;
+      return true;
+    });
+    if (target) {
+      return skillCommand(player, card, { targetPlayerId: target.id });
+    }
+  }
+
+  const ownedProperties = player.properties
+    .map((tileId) => ({ tileId, property: state.properties[tileId] }))
+    .filter((entry) => entry.property?.ownerId === player.id);
+  for (const card of usableCards) {
+    if (!AI_OWN_PROPERTY_SKILLS.has(card.code)) continue;
+    const target = ownedProperties.find((entry) => {
+      if (!entry.property) return false;
+      if (card.code === "renovationTeam") {
+        return !entry.property.isMortgaged && entry.property.level < MAX_PROPERTY_LEVEL;
+      }
+      return true;
+    });
+    if (target) {
+      return skillCommand(player, card, { targetTileId: target.tileId });
+    }
+  }
+
+  const rivalProperties = state.tiles
+    .map((tile) => ({ tile, property: state.properties[tile.id] }))
+    .filter((entry) => entry.tile.type === "property" && entry.property?.ownerId && entry.property.ownerId !== player.id);
+  for (const card of usableCards) {
+    if (!AI_RIVAL_PROPERTY_SKILLS.has(card.code)) continue;
+    const target = rivalProperties.find((entry) =>
+      card.range === undefined
+      || getTileGraphDistance(state.tiles, player.currentTileId, entry.tile.id) <= card.range
+    );
+    if (target) {
+      return skillCommand(player, card, { targetTileId: target.tile.id });
+    }
+  }
+
+  for (const card of usableCards) {
+    if (card.code === "stockStopLoss") {
+      const holding = Object.values(player.stockAccount.holdings).find((item) => item && item.shares > 0);
+      if (holding) return skillCommand(player, card, { stockId: holding.stockId });
+    }
+    if (card.code === "bullFlag") {
+      const stock = Object.values(state.stocks).sort((left, right) => left.currentPrice - right.currentPrice)[0];
+      if (stock) return skillCommand(player, card, { stockId: stock.id });
+    }
+    if (card.code === "bearAlert") {
+      const holding = Object.values(player.stockAccount.holdings).find((item) => item && item.shares > 0);
+      if (holding) return skillCommand(player, card, { stockId: holding.stockId });
+    }
+  }
+
+  const smallLoan = player.cash < 3000 ? usableCards.find((card) => card.code === "smallLoan") : undefined;
+  if (smallLoan) {
+    return skillCommand(player, smallLoan);
+  }
+  const debtExtension = (player.bankAccount.debtPrincipal ?? 0) > 0
+    ? usableCards.find((card) => card.code === "debtExtension")
+    : undefined;
+  if (debtExtension) {
+    return skillCommand(player, debtExtension);
+  }
+
+  const safeSelfCard = usableCards.find((card) => AI_SAFE_SELF_SKILLS.has(card.code));
+  if (!safeSelfCard) {
+    return null;
+  }
+  return safeSelfCard.code === "remoteDice"
+    ? skillCommand(player, safeSelfCard, { value: 6 })
+    : skillCommand(player, safeSelfCard);
+}
+
+function getAiStockCommand(state: GameState, player: PlayerState): AiTurnCommand | null {
+  if (!isStockTradingDay(state.gameCalendar)) {
+    return null;
+  }
+  const hasOrderToday = state.pendingStockOrders.some((order) =>
+    order.playerId === player.id
+    && order.submittedAt.year === state.gameCalendar.year
+    && order.submittedAt.month === state.gameCalendar.month
+    && order.submittedAt.day === state.gameCalendar.day
+  );
+  if (hasOrderToday) {
+    return null;
+  }
+  const signal = state.marketSignals.find((item) =>
+    !item.used
+    && item.ownerPlayerId === player.id
+    && item.accuracy >= 1
+    && item.stockId
+    && (item.direction === "bullish" || item.direction === "bearish")
+  );
+  if (!signal?.stockId) {
+    return null;
+  }
+  if (signal.direction === "bearish") {
+    const heldShares = player.stockAccount.holdings[signal.stockId]?.shares ?? 0;
+    return heldShares > 0
+      ? { kind: "submitStockOrder", playerId: player.id, stockId: signal.stockId, type: "sell", shares: heldShares }
+      : null;
+  }
+  const stock = state.stocks[signal.stockId];
+  if (!stock) {
+    return null;
+  }
+  const reserve = 5000;
+  const budget = Math.max(0, Math.min(player.cash * 0.25, player.cash - reserve));
+  const shares = Math.floor(budget / Math.max(1, stock.currentPrice));
+  return shares > 0
+    ? { kind: "submitStockOrder", playerId: player.id, stockId: signal.stockId, type: "buy", shares }
+    : null;
+}
+
 export function getAiTurnCommand(state: GameState): AiTurnCommand {
   if (state.status !== "playing" || state.phase === "gameOver") {
     return { kind: "none", reason: "游戏不在进行中。" };
@@ -148,6 +374,16 @@ export function getAiTurnCommand(state: GameState): AiTurnCommand {
   const recovery = getAiRecoveryCommand(state, player);
   if (recovery) {
     return recovery;
+  }
+
+  const nextSkillCommand = getAiSkillCommand(state, player);
+  if (nextSkillCommand) {
+    return nextSkillCommand;
+  }
+
+  const stockCommand = getAiStockCommand(state, player);
+  if (stockCommand) {
+    return stockCommand;
   }
 
   if (state.phase === "waitingRoll") {
@@ -206,7 +442,7 @@ export function getAiTurnCommand(state: GameState): AiTurnCommand {
   return { kind: "endTurn", playerId: player.id };
 }
 
-function executeAiTurnCommand(state: GameState, command: AiTurnCommand): AiTurnStepResult {
+export function executeAiTurnCommand(state: GameState, command: AiTurnCommand): AiTurnStepResult {
   switch (command.kind) {
     case "rollDice":
       return { command, outcome: rollDice(state, command.playerId), dicePlayerId: command.playerId };
@@ -236,6 +472,13 @@ function executeAiTurnCommand(state: GameState, command: AiTurnCommand): AiTurnS
     }
     case "declareBankruptcy":
       return { command, outcome: declareBankruptcy(state, command.playerId) };
+    case "useSkillCard":
+      return { command, outcome: useSkillCard(state, command.playerId, command.payload) };
+    case "submitStockOrder":
+      return {
+        command,
+        outcome: submitStockOrderAction(state, command.playerId, command.stockId, command.type, command.shares)
+      };
     case "endTurn":
       return { command, outcome: endTurn(state, command.playerId) };
     case "none":
