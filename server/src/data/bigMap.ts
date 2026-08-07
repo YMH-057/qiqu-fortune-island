@@ -1,8 +1,8 @@
-import type { Tile, TileId, TileType } from "@monopoly/shared";
+import { START_TILE_OPTIONS, type Tile, type TileId, type TileType } from "@monopoly/shared";
 import { propertyGroupByTileId } from "./propertyGroups";
 
 export const START_SALARY = 1500;
-export const START_TILE_IDS = ["tile-00", "tile-05", "tile-09", "tile-14"] as const;
+export const START_TILE_IDS: readonly TileId[] = START_TILE_OPTIONS.map((option) => option.tileId);
 
 interface TileDefinition {
   id: TileId;

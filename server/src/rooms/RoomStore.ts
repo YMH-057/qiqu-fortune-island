@@ -7,6 +7,8 @@ export interface RoomMember {
   avatar: string;
   selectedAvatarId?: AvatarId | undefined;
   selectedStartTileId?: string | undefined;
+  isBot?: boolean | undefined;
+  reconnectTokenHash?: string | undefined;
   ready: boolean;
   connected: boolean;
   socketId: string;

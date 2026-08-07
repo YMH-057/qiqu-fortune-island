@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qiqu-fortune-island.local/schemas/ai-decision-v1.json",
+  "title": "QiQu Fortune Island AI decision protocol v1",
+  "oneOf": [
+    {
+      "title": "Decision request",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "requestId", "context"],
+      "properties": {
+        "version": { "const": "qiqu-ai/1" },
+        "requestId": { "type": "string", "minLength": 1 },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["playerId", "game", "requestedAt"],
+          "properties": {
+            "playerId": { "type": "string", "minLength": 1 },
+            "game": { "type": "object" },
+            "requestedAt": { "type": "number" }
+          }
+        }
+      }
+    },
+    {
+      "title": "Decision response",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "requestId", "command"],
+      "properties": {
+        "version": { "const": "qiqu-ai/1" },
+        "requestId": { "type": "string", "minLength": 1 },
+        "command": { "$ref": "#/$defs/command" }
+      }
+    }
+  ],
+  "$defs": {
+    "basePlayerCommand": {
+      "type": "object",
+      "required": ["kind", "playerId"],
+      "properties": {
+        "kind": { "type": "string" },
+        "playerId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reason"],
+          "properties": {
+            "kind": { "const": "none" },
+            "reason": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "playerId"],
+          "properties": {
+            "kind": {
+              "enum": ["rollDice", "cancelPortal", "closeSkillShop", "skipLottery", "declareBankruptcy", "endTurn"]
+            },
+            "playerId": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "playerId", "tileId"],
+          "properties": {
+            "kind": { "enum": ["buyProperty", "upgradeProperty", "choosePath", "mortgageProperty"] },
+            "playerId": { "type": "string", "minLength": 1 },
+            "tileId": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "playerId", "targetTileId"],
+          "properties": {
+            "kind": { "const": "choosePortal" },
+            "playerId": { "type": "string", "minLength": 1 },
+            "targetTileId": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "playerId", "skillId"],
+          "properties": {
+            "kind": { "const": "buySkillCard" },
+            "playerId": { "type": "string", "minLength": 1 },
+            "skillId": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "playerId", "amount"],
+          "properties": {
+            "kind": { "const": "borrowCredit" },
+            "playerId": { "type": "string", "minLength": 1 },
+            "amount": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "playerId", "payload"],
+          "properties": {
+            "kind": { "const": "useSkillCard" },
+            "playerId": { "type": "string", "minLength": 1 },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["skillId"],
+              "properties": {
+                "skillId": { "type": "string", "minLength": 1 },
+                "targetPlayerId": { "type": "string", "minLength": 1 },
+                "targetTileId": { "type": "string", "minLength": 1 },
+                "stockId": { "type": "string", "minLength": 1 },
+                "value": { "type": "number" }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "playerId", "stockId", "type", "shares"],
+          "properties": {
+            "kind": { "const": "submitStockOrder" },
+            "playerId": { "type": "string", "minLength": 1 },
+            "stockId": { "type": "string", "minLength": 1 },
+            "type": { "enum": ["buy", "sell"] },
+            "shares": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      ]
+    }
+  }
+}

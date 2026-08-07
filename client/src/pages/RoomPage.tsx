@@ -1,6 +1,6 @@
-import { Check, Crown, Play, Radio, Save, UserMinus, Users } from "lucide-react";
+import { Bot, Check, Crown, Play, Radio, Save, UserMinus, Users } from "lucide-react";
 import { useState } from "react";
-import { START_TILE_OPTIONS, type EndCondition, type GameDurationMode, type GameSettings, type RoomPublicState, type TileId } from "@monopoly/shared";
+import { MAX_ROOM_PLAYERS, MIN_ROOM_PLAYERS, START_TILE_OPTIONS, type AiDifficulty, type EndCondition, type GameDurationMode, type GameSettings, type RoomPublicState, type TileId } from "@monopoly/shared";
 import { AvatarPortrait } from "../components/AvatarPortrait";
 import { AvatarSelectPanel } from "../components/AvatarSelectPanel";
 import { ConnectionHint } from "../components/ConnectionHint";
@@ -16,7 +16,8 @@ export function RoomPage({ room, playerId }: RoomPageProps) {
   const me = room.players.find((player) => player.id === playerId) ?? null;
   const isHost = me?.isHost ?? false;
   const canEditSettings = isHost && room.status === "lobby";
-  const allReady = room.players.length >= 2 && room.players.every((player) => player.ready);
+  const allReady = room.players.length >= MIN_ROOM_PLAYERS && room.players.every((player) => player.ready);
+  const aiPlayerCount = room.players.filter((player) => player.isBot).length;
   const { t } = useI18n();
   const [settingDrafts, setSettingDrafts] = useState<Record<string, string>>({});
   const selectedStart = START_TILE_OPTIONS.find((option) => option.tileId === me?.selectedStartTileId);
@@ -30,6 +31,11 @@ export function RoomPage({ room, playerId }: RoomPageProps) {
   function updateDuration(durationMode: GameDurationMode) {
     if (!canEditSettings) return;
     socket.emit("updateSettings", { durationMode, endCondition: "rounds" });
+  }
+
+  function updateAiDifficulty(aiDifficulty: AiDifficulty) {
+    if (!canEditSettings) return;
+    socket.emit("updateSettings", { aiDifficulty });
   }
 
   function updateDraft(key: string, value: string) {
@@ -97,6 +103,16 @@ export function RoomPage({ room, playerId }: RoomPageProps) {
     socket.emit("kickPlayer", { roomId: room.id, targetPlayerId });
   }
 
+  function addAiPlayer() {
+    if (!canEditSettings || room.players.length >= MAX_ROOM_PLAYERS) return;
+    socket.emit("addAiPlayer");
+  }
+
+  function removeAiPlayer(targetPlayerId: string) {
+    if (!canEditSettings) return;
+    socket.emit("removeAiPlayer", { playerId: targetPlayerId });
+  }
+
   function selectStartTile(tileId: TileId) {
     socket.emit("selectStartTile", { tileId });
   }
@@ -127,7 +143,11 @@ export function RoomPage({ room, playerId }: RoomPageProps) {
         <div className="roomStats">
           <span>
             <Users size={16} />
-            {room.players.length} / 4
+            {room.players.length} / {MAX_ROOM_PLAYERS}
+          </span>
+          <span>
+            <Bot size={16} />
+            AI {aiPlayerCount}
           </span>
           <span>
             <Crown size={16} />
@@ -201,6 +221,30 @@ export function RoomPage({ room, playerId }: RoomPageProps) {
             >
               {t("bankruptcyMode")}
             </button>
+          </div>
+          <div className="aiDifficultySetting">
+            <div>
+              <strong>AI 行动风格</strong>
+              <small>房间内所有 AI 共用，真人操作不受影响。</small>
+            </div>
+            <div className="segmentedControl aiDifficultyControl" aria-label="AI 行动风格">
+              {([
+                ["conservative", "保守", "保留更多现金，不主动使用攻击卡"],
+                ["balanced", "均衡", "经营、技能和股市保持均衡"],
+                ["aggressive", "激进", "更积极买地、升级和股票建仓"]
+              ] as const).map(([value, label, description]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={(room.settings.aiDifficulty ?? "balanced") === value ? "active" : ""}
+                  disabled={!canEditSettings}
+                  onClick={() => updateAiDifficulty(value)}
+                  title={description}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="settingsGrid">
             <label>
@@ -385,7 +429,7 @@ export function RoomPage({ room, playerId }: RoomPageProps) {
               <div>
                 <strong>{player.nickname}</strong>
                 <small>
-                  {player.isHost ? t("host") : t("guest")} · {player.connected ? t("online") : t("offline")}
+                  {player.isBot ? "AI 补位" : player.isHost ? t("host") : t("guest")} · {player.isBot ? "自动行动" : player.connected ? t("online") : t("offline")}
                 </small>
                 <small>
                   出生点：{room.settings.useSharedStartTile ? `统一 ${sharedStart?.nameZh ?? "GO"}` : START_TILE_OPTIONS.find((option) => option.tileId === player.selectedStartTileId)?.nameZh ?? "未选择"}
@@ -396,21 +440,45 @@ export function RoomPage({ room, playerId }: RoomPageProps) {
                 {player.ready ? t("ready") : t("waiting")}
               </em>
               {isHost && room.status === "lobby" && !player.isHost && (
-                <button
-                  className="kickButton"
-                  type="button"
-                  onClick={() => kickPlayer(player.id, player.nickname)}
-                  title="踢出成员"
-                >
-                  <UserMinus size={14} />
-                  踢出
-                </button>
+                player.isBot ? (
+                  <button
+                    className="kickButton aiRemoveButton"
+                    type="button"
+                    onClick={() => removeAiPlayer(player.id)}
+                    title="移除 AI 补位"
+                  >
+                    <UserMinus size={14} />
+                    移除 AI
+                  </button>
+                ) : (
+                  <button
+                    className="kickButton"
+                    type="button"
+                    onClick={() => kickPlayer(player.id, player.nickname)}
+                    title="踢出成员"
+                  >
+                    <UserMinus size={14} />
+                    踢出
+                  </button>
+                )
               )}
             </article>
           ))}
         </div>
-        {room.players.length < 2 && <p className="modalHint">至少需要 2 名玩家才能开始游戏。</p>}
+        {room.players.length < MIN_ROOM_PLAYERS && <p className="modalHint">至少需要 {MIN_ROOM_PLAYERS} 名玩家才能开始游戏。</p>}
         <div className="roomButtons">
+          {isHost && (
+            <button
+              type="button"
+              className="aiFillButton"
+              disabled={!canEditSettings || room.players.length >= MAX_ROOM_PLAYERS}
+              onClick={addAiPlayer}
+              title={room.players.length >= MAX_ROOM_PLAYERS ? "房间已满" : "添加一个服务端自动行动的 AI 玩家"}
+            >
+              <Bot size={18} />
+              添加 AI 补位
+            </button>
+          )}
           <button
             className={me?.ready ? "primaryButton" : ""}
             onClick={() => socket.emit("setReady", { ready: !(me?.ready ?? false) })}

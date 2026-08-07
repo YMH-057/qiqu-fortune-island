@@ -30,6 +30,13 @@ import {
   upgradeProperty,
   useSkillCard
 } from "./game/actions";
+import { AI_TURN_DELAY_MS, isAiControlledPlayer } from "./game/ai";
+import {
+  createConfiguredAiDecisionProvider,
+  runAiTurnStepWithProvider,
+  type AiDecisionProvider
+} from "./game/aiDecisionProvider";
+import { projectGameForPlayer } from "./game/playerView";
 import { executeDebugCommand, getDebugCatalog } from "./game/debug";
 import { exchangeMoneyToTickets, exchangeTicketsToMoney } from "./game/exchange";
 import { borrowCredit, depositMoney, leaveDetention, repayCredit, withdrawMoney } from "./game/bank";
@@ -51,6 +58,12 @@ type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents, InterServer
 type BroadcastOutcome = ActionOutcome;
 
 const turnTimers = new Map<string, NodeJS.Timeout>();
+let aiDecisionProvider: AiDecisionProvider | undefined;
+
+function getAiDecisionProvider(): AiDecisionProvider {
+  aiDecisionProvider ??= createConfiguredAiDecisionProvider();
+  return aiDecisionProvider;
+}
 
 function emitError(socket: GameSocket, message: string): void {
   socket.emit("errorMessage", { message });
@@ -77,19 +90,17 @@ function emitRoom(io: GameServer, manager: RoomManager, room: RoomRecord): void 
   io.to(room.id).emit("roomUpdated", manager.toPublicRoom(room));
 }
 
-function gameForPlayer(game: GameState, playerId: string): GameState {
-  return {
-    ...game,
-    marketSignals: (game.marketSignals ?? []).filter(
-      (signal) => signal.isPublic || signal.ownerPlayerId === playerId
-    )
-  };
+function hasLiveSocket(player: RoomRecord["players"][number]): boolean {
+  return !player.isBot && Boolean(player.socketId) && !player.socketId.startsWith("bot:");
 }
 
 function emitGame(io: GameServer, room: RoomRecord): void {
   if (room.game) {
     for (const player of room.players) {
-      io.to(player.socketId).emit("gameStateUpdated", gameForPlayer(room.game, player.id));
+      if (!hasLiveSocket(player)) {
+        continue;
+      }
+      io.to(player.socketId).emit("gameStateUpdated", projectGameForPlayer(room.game, player.id));
     }
   }
 }
@@ -99,7 +110,10 @@ function emitGameStarted(io: GameServer, room: RoomRecord): void {
     return;
   }
   for (const player of room.players) {
-    const game = gameForPlayer(room.game, player.id);
+    if (!hasLiveSocket(player)) {
+      continue;
+    }
+    const game = projectGameForPlayer(room.game, player.id);
     io.to(player.socketId).emit("gameStarted", game);
     io.to(player.socketId).emit("gameStateUpdated", game);
   }
@@ -119,12 +133,30 @@ function scheduleTurnTimer(io: GameServer, manager: RoomManager, room: RoomRecor
   if (!game || game.status !== "playing" || game.phase === "gameOver" || game.pendingMonthlySettlement) {
     return;
   }
-  const delay = Math.max(250, game.turnEndsAt - Date.now());
-  const timer = setTimeout(() => {
+  const currentPlayerId = game.turnOrder[game.currentTurnIndex];
+  const currentPlayer = currentPlayerId ? game.players.find((player) => player.id === currentPlayerId) : undefined;
+  const isAiTurn = isAiControlledPlayer(currentPlayer);
+  const delay = isAiTurn ? AI_TURN_DELAY_MS : Math.max(250, game.turnEndsAt - Date.now());
+  const timer = setTimeout(async () => {
     const freshRoom = manager.getRoom(room.id);
     const freshGame = freshRoom?.game;
     if (!freshRoom || !freshGame || freshGame.status !== "playing") {
       clearTurnTimer(room.id);
+      return;
+    }
+    const freshPlayerId = freshGame.turnOrder[freshGame.currentTurnIndex];
+    const freshPlayer = freshPlayerId ? freshGame.players.find((player) => player.id === freshPlayerId) : undefined;
+    if (isAiControlledPlayer(freshPlayer)) {
+      const step = await runAiTurnStepWithProvider(freshGame, getAiDecisionProvider());
+      if (!step.outcome) {
+        scheduleTurnTimer(io, manager, freshRoom);
+        return;
+      }
+      if (!step.outcome.ok) {
+        scheduleTurnTimer(io, manager, freshRoom);
+        return;
+      }
+      broadcastOutcome(io, manager, freshRoom, step.outcome, step.dicePlayerId);
       return;
     }
     const timedOutPlayerId = freshGame.turnOrder[freshGame.currentTurnIndex];
@@ -225,11 +257,17 @@ function broadcastOutcome(
   }
 
   if (outcome.stockAccount) {
-    io.to(room.id).emit("stockAccountUpdated", outcome.stockAccount);
+    const target = room.players.find((player) => player.id === outcome.stockAccount?.playerId);
+    if (target && hasLiveSocket(target)) {
+      io.to(target.socketId).emit("stockAccountUpdated", outcome.stockAccount);
+    }
   }
 
   if (outcome.stockTradeFailed) {
-    io.to(room.id).emit("stockTradeFailed", outcome.stockTradeFailed);
+    const target = room.players.find((player) => player.id === outcome.stockTradeFailed?.playerId);
+    if (target && hasLiveSocket(target)) {
+      io.to(target.socketId).emit("stockTradeFailed", outcome.stockTradeFailed);
+    }
   }
 
   if (outcome.stockOrder) {
@@ -242,21 +280,24 @@ function broadcastOutcome(
       playerId: outcome.stockOrder.playerId,
       orders: outcome.stockOrder.account.pendingOrders
     };
-    if (target) {
+    if (target && hasLiveSocket(target)) {
       io.to(target.socketId).emit("stockOrderSubmitted", message);
       io.to(target.socketId).emit("pendingStockOrdersUpdated", ordersMessage);
     }
   }
 
   if (outcome.stockOrderCanceled) {
-    io.to(room.id).emit("stockOrderCanceled", {
-      playerId: outcome.stockOrderCanceled.playerId,
-      orderId: outcome.stockOrderCanceled.orderId
-    });
-    io.to(room.id).emit("pendingStockOrdersUpdated", {
-      playerId: outcome.stockOrderCanceled.playerId,
-      orders: outcome.stockOrderCanceled.account.pendingOrders
-    });
+    const target = room.players.find((player) => player.id === outcome.stockOrderCanceled?.playerId);
+    if (target && hasLiveSocket(target)) {
+      io.to(target.socketId).emit("stockOrderCanceled", {
+        playerId: outcome.stockOrderCanceled.playerId,
+        orderId: outcome.stockOrderCanceled.orderId
+      });
+      io.to(target.socketId).emit("pendingStockOrdersUpdated", {
+        playerId: outcome.stockOrderCanceled.playerId,
+        orders: outcome.stockOrderCanceled.account.pendingOrders
+      });
+    }
   }
 
   if (outcome.stockSettlement) {
@@ -277,7 +318,7 @@ function broadcastOutcome(
 
   for (const privateSignal of outcome.privateSignals ?? []) {
     const target = room.players.find((player) => player.id === privateSignal.playerId);
-    if (target) {
+    if (target && hasLiveSocket(target)) {
       io.to(target.socketId).emit("privateMarketSignal", privateSignal);
     }
   }
@@ -304,6 +345,11 @@ function broadcastOutcome(
   scheduleTurnTimer(io, manager, room);
 }
 
+export function isCurrentRoomSocketSession(room: RoomRecord, playerId: string, socketId: string): boolean {
+  const member = room.players.find((player) => player.id === playerId);
+  return Boolean(member && !member.isBot && member.socketId === socketId);
+}
+
 function getSessionRoom(
   socket: GameSocket,
   manager: RoomManager
@@ -316,6 +362,9 @@ function getSessionRoom(
   const room = manager.getRoom(roomId);
   if (!room) {
     return { error: "Room not found." };
+  }
+  if (!isCurrentRoomSocketSession(room, playerId, socket.id)) {
+    return { error: "当前连接已失效，请刷新页面重新连接。" };
   }
   return { room, playerId };
 }
@@ -333,6 +382,7 @@ function buildOtherPlayersHoldings(game: GameState, playerId: string): Parameter
 }
 
 export function registerSocketHandlers(io: GameServer): void {
+  aiDecisionProvider = createConfiguredAiDecisionProvider();
   const manager = new RoomManager();
 
   io.on("connection", (socket) => {
@@ -345,15 +395,72 @@ export function registerSocketHandlers(io: GameServer): void {
 
       attachSocketToRoom(socket, result.room, result.playerId);
       const roomPublic = manager.toPublicRoom(result.room);
-      ack?.({ ok: true, room: roomPublic, playerId: result.playerId });
+      ack?.({
+        ok: true,
+        room: roomPublic,
+        playerId: result.playerId,
+        reconnectToken: result.reconnectToken
+      });
       socket.emit("roomUpdated", roomPublic);
     });
 
+    socket.on("addAiPlayer", (payload, ack) => {
+      const session = getSessionRoom(socket, manager);
+      if ("error" in session) {
+        ackError(ack, session.error);
+        emitError(socket, session.error);
+        return;
+      }
+      const result = manager.addAiPlayer(session.room.id, session.playerId, payload?.nickname);
+      if (!result.ok || !result.room) {
+        ackError(ack, result.error ?? "无法添加 AI 补位。");
+        emitError(socket, result.error ?? "无法添加 AI 补位。");
+        return;
+      }
+      const roomPublic = manager.toPublicRoom(result.room);
+      ack?.({ ok: true, room: roomPublic, playerId: session.playerId });
+      emitRoom(io, manager, result.room);
+    });
+
+    socket.on("removeAiPlayer", (payload, ack) => {
+      const session = getSessionRoom(socket, manager);
+      if ("error" in session) {
+        ackError(ack, session.error);
+        emitError(socket, session.error);
+        return;
+      }
+      const result = manager.removeAiPlayer(session.room.id, session.playerId, payload.playerId);
+      if (!result.ok || !result.room) {
+        ackError(ack, result.error ?? "无法移除 AI 补位。");
+        emitError(socket, result.error ?? "无法移除 AI 补位。");
+        return;
+      }
+      const roomPublic = manager.toPublicRoom(result.room);
+      ack?.({ ok: true, room: roomPublic, playerId: session.playerId });
+      emitRoom(io, manager, result.room);
+    });
+
     socket.on("joinRoom", (payload, ack) => {
-      const result = manager.joinRoom(payload.roomId, payload.nickname, socket.id, payload.playerId);
+      const result = manager.joinRoom(
+        payload.roomId,
+        payload.nickname,
+        socket.id,
+        payload.playerId,
+        payload.reconnectToken
+      );
       if (!result.ok || !result.room || !result.playerId) {
         ackError(ack, result.error ?? "Could not join room.");
         return;
+      }
+
+      if (result.previousSocketId && result.previousSocketId !== socket.id) {
+        const previousSocket = io.sockets.sockets.get(result.previousSocketId);
+        if (previousSocket) {
+          previousSocket.leave(result.room.id);
+          delete previousSocket.data.roomId;
+          delete previousSocket.data.playerId;
+          previousSocket.disconnect(true);
+        }
       }
 
       attachSocketToRoom(socket, result.room, result.playerId);
@@ -361,15 +468,16 @@ export function registerSocketHandlers(io: GameServer): void {
       const response: SocketAck = {
         ok: true,
         room: roomPublic,
-        playerId: result.playerId
+        playerId: result.playerId,
+        reconnectToken: result.reconnectToken
       };
       if (result.room.game) {
-        response.game = gameForPlayer(result.room.game, result.playerId);
+        response.game = projectGameForPlayer(result.room.game, result.playerId);
       }
       ack?.(response);
       emitRoom(io, manager, result.room);
       if (result.room.game) {
-        socket.emit("gameStateUpdated", gameForPlayer(result.room.game, result.playerId));
+        socket.emit("gameStateUpdated", projectGameForPlayer(result.room.game, result.playerId));
       }
     });
 
@@ -1391,9 +1499,12 @@ export function registerSocketHandlers(io: GameServer): void {
         });
       }
       const changedRooms = manager.markDisconnected(socket.id);
-      for (const room of changedRooms) {
+      for (const { room, resumeTurnTimer } of changedRooms) {
         emitRoom(io, manager, room);
         emitGame(io, room);
+        if (resumeTurnTimer) {
+          scheduleTurnTimer(io, manager, room);
+        }
       }
     });
   });

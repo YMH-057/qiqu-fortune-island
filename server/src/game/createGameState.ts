@@ -59,6 +59,7 @@ export function createGameState(roomId: RoomId, roomPlayers: RoomPlayer[], setti
       color: player.color,
       avatar: avatarNames[index % avatarNames.length] ?? "Pilot",
       selectedAvatarId: player.selectedAvatarId,
+      isBot: player.isBot,
       cash: initialMoney,
       position: startTile?.index ?? 0,
       currentTileId: startTile?.id ?? "tile-00",

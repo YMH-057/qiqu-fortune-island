@@ -53,6 +53,10 @@ type DictionaryKey =
   | "turn"
   | "done"
   | "stockMarket"
+  | "cameraFollow"
+  | "cameraOverview"
+  | "cameraZoomIn"
+  | "cameraZoomOut"
   | "language"
   | "zh"
   | "en";
@@ -108,6 +112,10 @@ const dictionaries: Record<Language, Record<DictionaryKey, string>> = {
     turn: "当前回合",
     done: "已结束",
     stockMarket: "股票市场",
+    cameraFollow: "跟随自己",
+    cameraOverview: "完整地图",
+    cameraZoomIn: "放大地图",
+    cameraZoomOut: "缩小地图",
     language: "语言",
     zh: "中文",
     en: "English"
@@ -162,6 +170,10 @@ const dictionaries: Record<Language, Record<DictionaryKey, string>> = {
     turn: "Turn",
     done: "Done",
     stockMarket: "Stock Market",
+    cameraFollow: "Follow Me",
+    cameraOverview: "Full Map",
+    cameraZoomIn: "Zoom in",
+    cameraZoomOut: "Zoom out",
     language: "Language",
     zh: "中文",
     en: "English"

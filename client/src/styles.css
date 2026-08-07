@@ -98,6 +98,8 @@ select:focus {
 .homePanel,
 .roomPanel {
   width: min(680px, 100%);
+  min-width: 0;
+  max-width: 100%;
   border-radius: 8px;
   border: 1px solid rgba(22, 32, 51, 0.12);
   background: rgba(255, 255, 255, 0.94);
@@ -169,6 +171,10 @@ select:focus {
   display: grid;
   gap: 10px;
   margin: 22px 0;
+  max-height: 430px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .lobbyPlayer {
@@ -213,6 +219,20 @@ select:focus {
   background: linear-gradient(180deg, #fb923c, #ef4444);
   font-size: 0.78rem;
   font-weight: 900;
+}
+
+.aiRemoveButton {
+  border-color: #7c3aed;
+  background: linear-gradient(180deg, #c084fc, #7c3aed);
+}
+
+.aiFillButton {
+  border: 3px solid #7c3aed;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fef3c7 0%, #f59e0b 55%, #ea580c 100%);
+  color: #3b0764;
+  box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.55), 0 6px 0 #7c2d12;
+  font-weight: 950;
 }
 
 .avatarDot {
@@ -383,6 +403,37 @@ select:focus {
 .segmentedControl button.active {
   color: #ffffff;
   background: #2374d8;
+}
+
+.aiDifficultySetting {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(270px, 1.3fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 3px solid rgba(93, 58, 125, 0.28);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.aiDifficultySetting > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.aiDifficultySetting small {
+  color: #665f78;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.aiDifficultyControl {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.aiDifficultyControl button {
+  min-width: 0;
+  padding-inline: 8px;
 }
 
 .settingsGrid {
@@ -1105,7 +1156,20 @@ select:focus {
     font-size: 2.4rem;
   }
 
+  .roomHeader {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .roomHeader .statusPill {
+    margin-left: auto;
+  }
+
   .settingsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .aiDifficultySetting {
     grid-template-columns: 1fr;
   }
 }
@@ -6435,5 +6499,89 @@ select {
 
   .adminDebugGrid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Player-follow camera: the SVG viewBox handles magnification without changing route coordinates. */
+.mapToolbar .cameraModeButton {
+  width: auto;
+  min-width: 88px;
+  padding: 0 12px;
+  white-space: nowrap;
+  font-size: 0.82rem;
+}
+
+.mapToolbar .cameraModeButton.active {
+  color: #ffffff;
+  background: linear-gradient(180deg, #42c8ff, #2389e8);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.55), 0 3px 0 rgba(93, 58, 125, 0.2);
+}
+
+.mapToolbar .cameraModeButton:disabled {
+  opacity: 0.48;
+}
+
+.graphBoard.camera-follow .graphTile,
+.graphBoard.camera-follow .graphRoad {
+  vector-effect: non-scaling-stroke;
+}
+
+.board-shell .graphBoard.camera-follow {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  aspect-ratio: auto;
+}
+
+.skillUnavailableReason {
+  display: block;
+  margin-top: 5px;
+  color: #a33a50;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+@media (max-width: 860px), (max-height: 560px) {
+  .board-shell {
+    align-items: stretch;
+    justify-items: stretch;
+    overflow: hidden;
+    touch-action: manipulation;
+  }
+
+  .board-shell .graphBoardWrap {
+    width: 100%;
+    height: 100%;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+    padding: 4px;
+  }
+
+  .board-shell .mapToolbar {
+    position: relative;
+    width: 100%;
+    max-width: none;
+    overflow-x: auto;
+    justify-content: center;
+    scrollbar-width: none;
+  }
+
+  .board-shell .mapToolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .board-shell .graphBoard {
+    width: min(100%, calc((100dvh - 190px) * 1.3889));
+    max-height: 100%;
+    margin: auto;
+  }
+
+  .mapToolbar .cameraModeButton {
+    min-width: 76px;
+    padding: 0 8px;
+    font-size: 0.74rem;
   }
 }

@@ -1,5 +1,7 @@
 import {
   GO_TILE_ID,
+  getSkillConflictReason,
+  getTileGraphDistance,
   type
   GameState,
   LuckCard,
@@ -43,6 +45,7 @@ import { calculateRent, checkPropertyGroupCompletion } from "./properties";
 import { lotteryConfig } from "./lottery";
 import { maybeCreateMarketAnnouncement } from "./marketAnnouncements";
 import { chooseRandomDirectionAtJunction } from "./movement";
+import { appendGameLog } from "./gameLog";
 import { applyStockTileEffect, createDirectedStockSignal, createMarketSignal } from "./stockTileEffects";
 import { settleMonthlyBankInterest } from "./bank";
 import {
@@ -151,13 +154,7 @@ function randomItem<T>(items: T[]): T {
 }
 
 export function addLog(state: GameState, message: string): void {
-  state.logs.unshift({
-    id: uid("log"),
-    turn: state.completedTurns,
-    message,
-    createdAt: Date.now()
-  });
-  state.logs = state.logs.slice(0, 100);
+  appendGameLog(state, message);
 }
 
 function logReason(reason: string): string {
@@ -233,12 +230,15 @@ function openMonthlySettlementGate(state: GameState, settlements: MonthlyBankSet
     return;
   }
   const waitingPlayerIds = state.players
-    .filter((player) => player.connected && !player.bankrupt)
+    .filter((player) => player.connected && !player.isBot && !player.bankrupt)
     .map((player) => player.id);
+  if (waitingPlayerIds.length === 0) {
+    return;
+  }
   state.pendingMonthlySettlement = {
     id: uid("monthly-settlement"),
     settlements,
-    waitingPlayerIds: waitingPlayerIds.length > 0 ? waitingPlayerIds : state.players.map((player) => player.id),
+    waitingPlayerIds,
     createdAt: Date.now()
   };
 }
@@ -1077,41 +1077,7 @@ function buildSkillShopOffers(state: GameState, player: PlayerState): SkillCard[
 }
 
 function getSkillDistance(state: GameState, fromTileId: TileId, toTileId: TileId): number {
-  if (fromTileId === toTileId) {
-    return 0;
-  }
-
-  const neighbors = new Map<TileId, TileId[]>();
-  for (const tile of state.tiles) {
-    const current = neighbors.get(tile.id) ?? [];
-    for (const next of tile.next ?? []) {
-      current.push(next);
-      neighbors.set(tile.id, current);
-      const reverse = neighbors.get(next) ?? [];
-      reverse.push(tile.id);
-      neighbors.set(next, reverse);
-    }
-  }
-
-  const queue: Array<{ tileId: TileId; distance: number }> = [{ tileId: fromTileId, distance: 0 }];
-  const seen = new Set<TileId>([fromTileId]);
-  while (queue.length > 0) {
-    const item = queue.shift();
-    if (!item) {
-      break;
-    }
-    for (const next of neighbors.get(item.tileId) ?? []) {
-      if (seen.has(next)) {
-        continue;
-      }
-      if (next === toTileId) {
-        return item.distance + 1;
-      }
-      seen.add(next);
-      queue.push({ tileId: next, distance: item.distance + 1 });
-    }
-  }
-  return Number.POSITIVE_INFINITY;
+  return getTileGraphDistance(state.tiles, fromTileId, toTileId);
 }
 
 interface TileEffectOptions {
@@ -2062,6 +2028,9 @@ export function submitStockOrderAction(
   type: "buy" | "sell",
   shares: number
 ): ActionOutcome {
+  if (state.status !== "playing" || state.phase === "gameOver") {
+    return fail("游戏已结束，不能提交股票委托。");
+  }
   const result = submitStockOrder(state, playerId, stockId, type, shares);
   if (!result.ok || !result.order || !result.account) {
     return fail(result.error ?? "无法提交股票委托。");
@@ -2078,6 +2047,9 @@ export function submitStockOrderAction(
 }
 
 export function cancelStockOrderAction(state: GameState, playerId: PlayerId, orderId: string): ActionOutcome {
+  if (state.status !== "playing" || state.phase === "gameOver") {
+    return fail("游戏已结束，不能取消股票委托。");
+  }
   const result = cancelStockOrder(state, playerId, orderId);
   if (!result.ok || !result.account || !result.orderId) {
     return fail(result.error ?? "无法取消股票委托。");
@@ -2219,6 +2191,14 @@ function findSkillProperty(
   return { tile, property, owner };
 }
 
+function consumePropertyInsurance(property: PropertyState): boolean {
+  if (!property.insuranceTurns || property.insuranceTurns <= 0) {
+    return false;
+  }
+  property.insuranceTurns = 0;
+  return true;
+}
+
 function blockAttackWithCounterShield(state: GameState, attacker: PlayerState, defender: PlayerState | null): BankruptNotice[] | null {
   if (!defender || defender.id === attacker.id) {
     return null;
@@ -2253,27 +2233,36 @@ export function useSkillCard(
   playerId: PlayerId,
   payload: { skillId: string; targetPlayerId?: PlayerId | undefined; targetTileId?: TileId | undefined; stockId?: StockId | undefined; value?: number | undefined }
 ): ActionOutcome {
-  const current = requireCurrentPlayer(state, playerId);
-  if (typeof current === "string") {
-    return fail(current);
-  }
-  if (state.phase === "gameOver") {
+  if (state.status !== "playing" || state.phase === "gameOver") {
     return fail("游戏已经结束。");
   }
-  if (takeStatus(current, "skillBlock")) {
-    return fail("你的技能卡被临时干扰，本次不能使用。");
+  if (state.pendingMonthlySettlement) {
+    return fail("请先完成月度结算确认。");
   }
-
+  const player = getPlayer(state, playerId);
+  if (!player || player.bankrupt) {
+    return fail("玩家不存在或已经破产。");
+  }
+  const currentTurnPlayer = getCurrentPlayer(state);
+  const current = player;
   const cardIndex = current.skillCards.findIndex((card) => card.id === payload.skillId);
   const card = current.skillCards[cardIndex];
   if (!card) {
     return fail("没有找到这张技能卡。");
   }
-  if (card.code === "reverseCompass" && current.statusEffects.some((effect) => effect.type === "reverseWalk" && effect.turns > 0)) {
-    return fail("你已经处于反向行走状态，不能重复叠加方向类技能。");
+  if (card.code === "releasePermit" && !hasDetentionStatus(current)) {
+    return fail("当前没有住院或入狱状态，不能使用出院出狱许可。");
   }
-  if (card.code === "routeToken" && current.statusEffects.some((effect) => effect.type === "routeChoice" && effect.turns > 0)) {
-    return fail("你已经拥有一次选路机会，先使用后再叠加。");
+  const canReleaseWhileDetained = card.code === "releasePermit" && hasDetentionStatus(current);
+  if (currentTurnPlayer?.id !== current.id && !canReleaseWhileDetained) {
+    return fail("当前不是你的回合。");
+  }
+  if (takeStatus(current, "skillBlock")) {
+    return fail("你的技能卡被临时干扰，本次不能使用。");
+  }
+  const conflictReason = getSkillConflictReason(current, card);
+  if (conflictReason) {
+    return fail(conflictReason);
   }
 
   const movements: MovementEvent[] = [];
@@ -2680,12 +2669,14 @@ export function useSkillCard(
     if (typeof found === "string") {
       return fail(found);
     }
-    if (!found.property.isMortgaged && found.property.level < MAX_PROPERTY_LEVEL) {
-      found.property.level += 1;
-      skillMessage = `${current.nickname} 派出装修队，${found.tile.name} 升到 ${found.property.level} 级。`;
-    } else {
-      skillMessage = `${current.nickname} 派出装修队，但 ${found.tile.name} 当前不能升级。`;
+    if (found.property.isMortgaged) {
+      return fail(`${found.tile.name} 已抵押，不能使用装修队。`);
     }
+    if (found.property.level >= MAX_PROPERTY_LEVEL) {
+      return fail(`${found.tile.name} 已达到最高等级，不能使用装修队。`);
+    }
+    found.property.level += 1;
+    skillMessage = `${current.nickname} 派出装修队，${found.tile.name} 升到 ${found.property.level} 级。`;
   } else if (card.code === "rentLimitOrder") {
     const found = findSkillProperty(state, current, card, payload.targetTileId, "rival");
     if (typeof found === "string") {
@@ -2778,6 +2769,8 @@ export function useSkillCard(
     if (blocked) {
       bankrupted.push(...blocked);
       skillMessage = `${found.owner?.nickname ?? "对手"} 的反击护盾抵消了拆除许可。`;
+    } else if (consumePropertyInsurance(found.property)) {
+      skillMessage = `${found.tile.name} 的地产保险抵消了拆除许可。`;
     } else {
       found.property.level = Math.max(1, found.property.level - 1);
       skillMessage = `${current.nickname} 拆除了 ${found.tile.name} 的一段设施，等级降为 ${found.property.level}。`;
@@ -2805,6 +2798,8 @@ export function useSkillCard(
     if (blocked) {
       bankrupted.push(...blocked);
       skillMessage = `${found.owner?.nickname ?? "对手"} 的反击护盾抵消了恶魔涂鸦。`;
+    } else if (consumePropertyInsurance(found.property)) {
+      skillMessage = `${found.tile.name} 的地产保险抵消了恶魔涂鸦。`;
     } else {
       found.property.level = Math.max(1, found.property.level - 1);
       found.property.rentCutTurns = Math.max(found.property.rentCutTurns ?? 0, 3);

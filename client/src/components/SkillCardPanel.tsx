@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { GameState, SkillCard, StockId, Tile, UseSkillPayload } from "@monopoly/shared";
+import { getSkillConflictReason, getTileGraphDistance, type GameState, type SkillCard, type StockId, type Tile, type UseSkillPayload } from "@monopoly/shared";
 import { socket } from "../socket/socket";
 
 interface SkillCardPanelProps {
@@ -60,13 +60,40 @@ export function SkillCardPanel({ game, playerId }: SkillCardPanelProps) {
       }),
     [game.properties, game.tiles, playerId]
   );
-  const allPropertyTiles = useMemo<Tile[]>(
-    () => [...ownedTiles, ...rivalPropertyTiles],
-    [ownedTiles, rivalPropertyTiles]
-  );
   const stockIds = Object.keys(game.stocks);
 
   if (!me) {
+    return null;
+  }
+  const localPlayer = me;
+
+  const isDetained = localPlayer.skipTurns > 0 || localPlayer.statusEffects.some(
+    (effect) => (effect.type === "jail" || effect.type === "hospital") && effect.turns > 0
+  );
+
+  function eligibleRivals(card: SkillCard) {
+    return rivals.filter((player) =>
+      card.range === undefined || getTileGraphDistance(game.tiles, localPlayer.currentTileId, player.currentTileId) <= card.range
+    );
+  }
+
+  function propertyPool(card: SkillCard) {
+    const pool = card.type === "attack" ? rivalPropertyTiles : ownedTiles;
+    if (card.type !== "attack" || card.range === undefined) return pool;
+    return pool.filter((tile) => getTileGraphDistance(game.tiles, localPlayer.currentTileId, tile.id) <= card.range!);
+  }
+
+  function unavailableReason(card: SkillCard): string | null {
+    if (game.status !== "playing" || game.phase === "gameOver") return "游戏已结束";
+    if (game.pendingMonthlySettlement) return "请先完成月度结算";
+    if (localPlayer.bankrupt) return "已破产，不能使用技能卡";
+    const mayReleaseNow = card.code === "releasePermit" && isDetained;
+    if (!isMyTurn && !mayReleaseNow) return "当前不是你的回合";
+    const conflict = getSkillConflictReason(localPlayer, card);
+    if (conflict) return conflict;
+    if (card.code === "releasePermit" && !isDetained) return "当前没有住院或入狱状态";
+    if (card.target === "player" && eligibleRivals(card).length === 0) return "范围内没有可用对手";
+    if (card.target === "property" && propertyPool(card).length === 0) return "没有符合条件的目标地产";
     return null;
   }
 
@@ -78,20 +105,27 @@ export function SkillCardPanel({ game, playerId }: SkillCardPanelProps) {
       payload.value = diceValue;
     }
     if (card.target === "player") {
-      const nextTargetPlayerId = targetPlayerId || rivals[0]?.id;
+      const available = eligibleRivals(card);
+      const nextTargetPlayerId = available.some((player) => player.id === targetPlayerId)
+        ? targetPlayerId
+        : available[0]?.id;
       if (nextTargetPlayerId) {
         payload.targetPlayerId = nextTargetPlayerId;
       }
     }
     if (card.target === "tile") {
-      const nextTargetTileId = targetTileId || teleportTiles[0]?.id;
+      const nextTargetTileId = teleportTiles.some((tile) => tile.id === targetTileId)
+        ? targetTileId
+        : teleportTiles[0]?.id;
       if (nextTargetTileId) {
         payload.targetTileId = nextTargetTileId;
       }
     }
     if (card.target === "property") {
-      const propertyPool = card.type === "attack" ? rivalPropertyTiles : ownedTiles;
-      const nextTargetTileId = targetTileId || propertyPool[0]?.id || allPropertyTiles[0]?.id;
+      const available = propertyPool(card);
+      const nextTargetTileId = available.some((tile) => tile.id === targetTileId)
+        ? targetTileId
+        : available[0]?.id;
       if (nextTargetTileId) {
         payload.targetTileId = nextTargetTileId;
       }
@@ -161,8 +195,10 @@ export function SkillCardPanel({ game, playerId }: SkillCardPanelProps) {
       </div>
       <div className="skillCardList">
         {me.skillCards.length === 0 && <p className="emptySkill">还没有技能卡，路过技能小铺可用彩券购买。</p>}
-        {me.skillCards.map((card) => (
-          <article key={card.id} className={`skillCard skill-${card.code} rarity-${card.rarity ?? "common"}`}>
+        {me.skillCards.map((card) => {
+          const reason = unavailableReason(card);
+          return (
+          <article key={card.id} className={`skillCard skill-${card.code} rarity-${card.rarity ?? "common"} ${reason ? "unavailable" : ""}`}>
             <strong>{card.displayName ?? card.name}</strong>
             <p>{card.description}</p>
             <small>
@@ -170,7 +206,7 @@ export function SkillCardPanel({ game, playerId }: SkillCardPanelProps) {
               {card.range ? ` · 范围 ${card.range} 格` : ""}
             </small>
             <div className="skillCardActions">
-              <button disabled={!isMyTurn} onClick={() => useCard(card)}>
+              <button disabled={Boolean(reason)} title={reason ?? undefined} onClick={() => useCard(card)}>
                 {actionLabel(card)}
               </button>
               <button
@@ -181,8 +217,10 @@ export function SkillCardPanel({ game, playerId }: SkillCardPanelProps) {
                 回收 +{card.costTickets}
               </button>
             </div>
+            {reason && <span className="skillUnavailableReason">{reason}</span>}
           </article>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
